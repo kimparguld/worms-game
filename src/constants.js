@@ -1,0 +1,9 @@
+export const GRAVITY = 900; // px/s^2
+export const WORM_MOVE_ACCEL = 800; // px/s^2
+export const WORM_MOVE_SPEED = 120; // px/s max horizontal run speed
+export const JUMP_IMPULSE = 320; // px/s upward velocity applied on jump
+export const FALL_DAMAGE_VELOCITY_THRESHOLD = 400; // px/s impact speed before fall damage applies
+export const FALL_DAMAGE_PER_VELOCITY = 0.2; // damage per px/s of impact speed over the threshold
+export const TURN_DURATION_MS = 45000;
+export const STARTING_HP = 100;
+export const WIND_MAX = 50; // px/s^2, max magnitude of per-turn wind acceleration
