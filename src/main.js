@@ -25,7 +25,7 @@ let projectiles = [];
 let rope = null;
 let charging = false;
 let chargePower = 0;
-let retirementTimer = 0;
+let retirementTimer = null;
 let winner = null;
 let lastTime = performance.now();
 
@@ -56,11 +56,17 @@ function update(dt) {
   const worm = active.worm;
   const weaponKey = WEAPON_KEYS[input.selectedWeapon - 1];
 
+  // Apply rope-swing logic only to the active worm when rope is attached
   if (rope) {
     updateRopeSwing(worm, rope, dt);
     if (input.jump) rope = null;
-  } else {
-    updateWormPhysics(worm, terrain, input, dt);
+  }
+
+  // Apply physics to all worms: real input for active worm, neutral input for others
+  const neutralInput = { left: false, right: false, jump: false };
+  for (const w of allWorms()) {
+    const wormInput = w === worm ? input : neutralInput;
+    updateWormPhysics(w, terrain, wormInput, dt);
   }
 
   if (input.aimUp) adjustAim(worm, -1, dt);
@@ -84,10 +90,11 @@ function update(dt) {
     updateProjectile(p, terrain, allWorms(), match.wind, dt);
   }
 
-  if (retirementTimer > 0) {
+  if (retirementTimer !== null) {
     retirementTimer -= dt;
     if (retirementTimer <= 0 && projectiles.every((p) => !p.alive)) {
       advanceTurn(match);
+      retirementTimer = null;
     }
   }
 
