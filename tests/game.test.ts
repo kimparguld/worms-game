@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer, checkWinner } from '../src/game.js';
 import { createWorm } from '../src/worm.js';
+import type { Team } from '../src/types.js';
 
-function makeTeams() {
+function makeTeams(): Team[] {
   return [
     { playerId: 'p1', worms: [createWorm(0, 0, 'p1', 'A1'), createWorm(0, 0, 'p1', 'A2')] },
     { playerId: 'p2', worms: [createWorm(0, 0, 'p2', 'B1'), createWorm(0, 0, 'p2', 'B2')] },

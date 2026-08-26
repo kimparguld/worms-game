@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createWorm, takeDamage, adjustAim, updateWormPhysics } from '../src/worm.js';
 import { createTerrain } from '../src/terrain.js';
+import type { Terrain, WormInput } from '../src/types.js';
 
-function flatTerrain(width, height, groundY) {
+function flatTerrain(width: number, height: number, groundY: number): Terrain {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
   for (let x = 0; x < width; x++) {
@@ -11,7 +12,7 @@ function flatTerrain(width, height, groundY) {
   return terrain;
 }
 
-function slopedTerrain(width, height, startGroundY, slopePerX) {
+function slopedTerrain(width: number, height: number, startGroundY: number, slopePerX: number): Terrain {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
   for (let x = 0; x < width; x++) {
@@ -57,7 +58,7 @@ describe('updateWormPhysics', () => {
   it('applies gravity and lands the worm on flat ground', () => {
     const terrain = flatTerrain(100, 100, 80);
     const worm = createWorm(50, 50, 'p1', 'A');
-    const input = { left: false, right: false, jump: false };
+    const input: WormInput = { left: false, right: false, jump: false };
     for (let i = 0; i < 200; i++) updateWormPhysics(worm, terrain, input, 1 / 60);
     expect(worm.onGround).toBe(true);
     expect(worm.vy).toBe(0);
@@ -68,7 +69,7 @@ describe('updateWormPhysics', () => {
     const terrain = flatTerrain(200, 100, 80);
     const worm = createWorm(50, 79, 'p1', 'A');
     worm.onGround = true;
-    const input = { left: false, right: true, jump: false };
+    const input: WormInput = { left: false, right: true, jump: false };
     const startX = worm.x;
     for (let i = 0; i < 30; i++) updateWormPhysics(worm, terrain, input, 1 / 60);
     expect(worm.x).toBeGreaterThan(startX);
@@ -82,7 +83,7 @@ describe('updateWormPhysics', () => {
     const terrain = slopedTerrain(width, height, 150, 0.1);
     const worm = createWorm(20, 148, 'p1', 'A');
     worm.onGround = true;
-    const input = { left: false, right: true, jump: false };
+    const input: WormInput = { left: false, right: true, jump: false };
     const startX = worm.x;
     const dt = 1 / 60;
     for (let i = 0; i < 120; i++) updateWormPhysics(worm, terrain, input, dt); // 2 simulated seconds
@@ -93,7 +94,7 @@ describe('updateWormPhysics', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
     const worm = createWorm(50, 0, 'p1', 'A');
-    const input = { left: false, right: false, jump: false };
+    const input: WormInput = { left: false, right: false, jump: false };
     for (let i = 0; i < 300; i++) updateWormPhysics(worm, terrain, input, 1 / 60);
     expect(worm.alive).toBe(false);
   });

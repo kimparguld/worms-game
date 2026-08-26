@@ -1,7 +1,8 @@
 import { isSolid } from './terrain.js';
 import { GRAVITY } from './constants.js';
+import type { Terrain, Worm, Rope } from './types.js';
 
-export function fireRope(originX, originY, angle, terrain, maxLength) {
+export function fireRope(originX: number, originY: number, angle: number, terrain: Terrain, maxLength: number): Rope {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const step = 2;
@@ -15,7 +16,8 @@ export function fireRope(originX, originY, angle, terrain, maxLength) {
   return { attached: false, anchorX: null, anchorY: null, length: 0 };
 }
 
-export function updateRopeSwing(worm, rope, dt) {
+export function updateRopeSwing(worm: Worm, rope: Rope, dt: number): void {
+  if (rope.anchorX == null || rope.anchorY == null) return;
   const dx = worm.x - rope.anchorX;
   const dy = worm.y - rope.anchorY;
   const currentAngle = Math.atan2(dy, dx);

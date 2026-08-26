@@ -2,8 +2,9 @@ import { integrateProjectile, calcDamage, WEAPONS } from './weapons.js';
 import { isSolid, carveCircle } from './terrain.js';
 import { takeDamage } from './worm.js';
 import { GRAVITY } from './constants.js';
+import type { Terrain, Worm, WeaponDef, WeaponKey, Projectile, ProjectileUpdateResult } from './types.js';
 
-export function createProjectile(weaponKey, x, y, angle, power) {
+export function createProjectile(weaponKey: WeaponKey, x: number, y: number, angle: number, power: number): Projectile {
   const def = WEAPONS[weaponKey];
   const speed = def.minSpeed + (def.maxSpeed - def.minSpeed) * power;
   return {
@@ -16,12 +17,20 @@ export function createProjectile(weaponKey, x, y, angle, power) {
   };
 }
 
-export function updateProjectile(projectile, terrain, worms, wind, dt) {
+export function updateProjectile(
+  projectile: Projectile,
+  terrain: Terrain,
+  worms: Worm[],
+  wind: number,
+  dt: number,
+): ProjectileUpdateResult {
   if (!projectile.alive) return { exploded: false };
   const def = WEAPONS[projectile.weaponKey];
   const isFuseBased = def.fuseTime != null;
 
-  if (isFuseBased) projectile.fuseRemaining -= dt;
+  if (isFuseBased && projectile.fuseRemaining != null) {
+    projectile.fuseRemaining -= dt;
+  }
 
   const prevX = projectile.x;
   const prevY = projectile.y;
@@ -38,7 +47,7 @@ export function updateProjectile(projectile, terrain, worms, wind, dt) {
   projectile.vx = vel.x;
   projectile.vy = vel.y;
 
-  const fuseExpired = isFuseBased && projectile.fuseRemaining <= 0;
+  const fuseExpired = isFuseBased && projectile.fuseRemaining != null && projectile.fuseRemaining <= 0;
   const hitTerrain = isSolid(terrain, projectile.x, projectile.y);
 
   if (isFuseBased) {
@@ -67,7 +76,7 @@ export function updateProjectile(projectile, terrain, worms, wind, dt) {
   return { exploded: false };
 }
 
-function explode(projectile, terrain, worms, def) {
+function explode(projectile: Projectile, terrain: Terrain, worms: Worm[], def: WeaponDef): void {
   projectile.alive = false;
   if (def.craterRadius > 0) {
     carveCircle(terrain, projectile.x, projectile.y, def.craterRadius);

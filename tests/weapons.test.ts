@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { WEAPONS, integrateProjectile, calcDamage, raycastHit } from '../src/weapons.js';
 import { createTerrain } from '../src/terrain.js';
+import { createWorm } from '../src/worm.js';
 
 describe('WEAPONS', () => {
   it('defines exactly the five spec weapons', () => {
@@ -52,7 +53,7 @@ describe('raycastHit', () => {
   it('hits a worm before terrain if the worm is closer', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
-    const worm = { x: 50, y: 20, alive: true };
+    const worm = createWorm(50, 20, 'p1', 'A');
     const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);
     expect(hit.type).toBe('worm');
     expect(hit.worm).toBe(worm);

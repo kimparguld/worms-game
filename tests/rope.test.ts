@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { fireRope, updateRopeSwing } from '../src/rope.js';
 import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
+import type { Rope } from '../src/types.js';
 
-function ceilingTerrain(width, height, ceilingY) {
+function ceilingTerrain(width: number, height: number, ceilingY: number) {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
   for (let x = 0; x < width; x++) {
@@ -31,10 +32,10 @@ describe('fireRope', () => {
 describe('updateRopeSwing', () => {
   it('keeps the worm at a fixed distance from the anchor while swinging', () => {
     const worm = createWorm(50, 70, 'p1', 'A');
-    const rope = { anchorX: 50, anchorY: 20, length: 50 };
+    const rope: Rope = { attached: true, anchorX: 50, anchorY: 20, length: 50 };
     worm.vx = 20;
     for (let i = 0; i < 60; i++) updateRopeSwing(worm, rope, 1 / 60);
-    const distance = Math.hypot(worm.x - rope.anchorX, worm.y - rope.anchorY);
+    const distance = Math.hypot(worm.x - rope.anchorX!, worm.y - rope.anchorY!);
     expect(distance).toBeCloseTo(rope.length, 0);
   });
 });

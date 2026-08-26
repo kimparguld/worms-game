@@ -1,4 +1,14 @@
-export function renderFrame(ctx, terrain, worms, projectiles, matchState, selectedWeapon, rope) {
+import type { Terrain, Worm, Projectile, MatchState, Rope } from './types.js';
+
+export function renderFrame(
+  ctx: CanvasRenderingContext2D,
+  terrain: Terrain,
+  worms: Worm[],
+  projectiles: Projectile[],
+  matchState: MatchState,
+  selectedWeapon: number,
+  rope: Rope | null,
+): void {
   const { width, height } = terrain;
   const imageData = ctx.createImageData(width, height);
   for (let i = 0; i < terrain.mask.length; i++) {
@@ -11,13 +21,13 @@ export function renderFrame(ctx, terrain, worms, projectiles, matchState, select
   }
   ctx.putImageData(imageData, 0, 0);
 
+  const active = matchState.turnOrder[matchState.currentIndex];
+
   // Draw rope visualization if attached
-  if (rope) {
-    const active = matchState.turnOrder[matchState.currentIndex];
+  if (rope && rope.anchorX != null && rope.anchorY != null) {
     const worm = active.worm;
     const ropeColor = '#8d6e63';
 
-    // Draw line from worm to anchor
     ctx.strokeStyle = ropeColor;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -25,14 +35,11 @@ export function renderFrame(ctx, terrain, worms, projectiles, matchState, select
     ctx.lineTo(rope.anchorX, rope.anchorY);
     ctx.stroke();
 
-    // Draw anchor point
     ctx.fillStyle = ropeColor;
     ctx.beginPath();
     ctx.arc(rope.anchorX, rope.anchorY, 4, 0, Math.PI * 2);
     ctx.fill();
   }
-
-  const active = matchState.turnOrder[matchState.currentIndex];
 
   for (const worm of worms) {
     if (!worm.alive) continue;

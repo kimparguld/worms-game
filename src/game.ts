@@ -1,7 +1,8 @@
 import { TURN_DURATION_MS, WIND_MAX } from './constants.js';
+import type { Team, TurnEntry, MatchState } from './types.js';
 
-export function createMatch(teams) {
-  const turnOrder = [];
+export function createMatch(teams: Team[]): MatchState {
+  const turnOrder: TurnEntry[] = [];
   const maxWorms = Math.max(...teams.map((t) => t.worms.length));
   for (let i = 0; i < maxWorms; i++) {
     for (const team of teams) {
@@ -17,11 +18,11 @@ export function createMatch(teams) {
   };
 }
 
-export function currentWorm(matchState) {
+export function currentWorm(matchState: MatchState): TurnEntry {
   return matchState.turnOrder[matchState.currentIndex];
 }
 
-export function advanceTurn(matchState) {
+export function advanceTurn(matchState: MatchState): void {
   const n = matchState.turnOrder.length;
   for (let i = 1; i <= n; i++) {
     const idx = (matchState.currentIndex + i) % n;
@@ -34,18 +35,18 @@ export function advanceTurn(matchState) {
   }
 }
 
-export function tickTurnTimer(matchState, dtMs) {
+export function tickTurnTimer(matchState: MatchState, dtMs: number): void {
   matchState.turnTimeRemaining -= dtMs;
   if (matchState.turnTimeRemaining <= 0) advanceTurn(matchState);
 }
 
-export function checkWinner(teams) {
+export function checkWinner(teams: Team[]): string | null {
   const teamsAlive = teams.filter((t) => t.worms.some((w) => w.alive));
   if (teamsAlive.length === 1) return teamsAlive[0].playerId;
   if (teamsAlive.length === 0) return 'draw';
   return null;
 }
 
-function randomWind() {
+function randomWind(): number {
   return (Math.random() * 2 - 1) * WIND_MAX;
 }

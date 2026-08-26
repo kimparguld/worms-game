@@ -1,6 +1,7 @@
 import { isSolid } from './terrain.js';
+import type { Terrain, WeaponDef, WeaponKey, Worm, RaycastHit, ProjectileIntegration, Vector2 } from './types.js';
 
-export const WEAPONS = {
+export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   bazooka: {
     key: 'bazooka', maxDamage: 60, blastRadius: 40, craterRadius: 40,
     chargeable: true, minSpeed: 200, maxSpeed: 600,
@@ -28,7 +29,13 @@ export const WEAPONS = {
   },
 };
 
-export function integrateProjectile(pos, vel, gravity, wind, dt) {
+export function integrateProjectile(
+  pos: Vector2,
+  vel: Vector2,
+  gravity: number,
+  wind: number,
+  dt: number,
+): ProjectileIntegration {
   const nvx = vel.x + wind * dt;
   const nvy = vel.y + gravity * dt;
   return {
@@ -37,14 +44,21 @@ export function integrateProjectile(pos, vel, gravity, wind, dt) {
   };
 }
 
-export function calcDamage(distance, blastRadius, maxDamage) {
+export function calcDamage(distance: number, blastRadius: number, maxDamage: number): number {
   if (blastRadius <= 0) return distance <= 0 ? maxDamage : 0;
   if (distance >= blastRadius) return 0;
   const falloff = 1 - distance / blastRadius;
   return Math.round(maxDamage * falloff);
 }
 
-export function raycastHit(terrain, worms, originX, originY, angle, maxRange) {
+export function raycastHit(
+  terrain: Terrain,
+  worms: Worm[],
+  originX: number,
+  originY: number,
+  angle: number,
+  maxRange: number,
+): RaycastHit {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const step = 2;

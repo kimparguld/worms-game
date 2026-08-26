@@ -1,4 +1,3 @@
-// tests/constants.test.js
 import { describe, it, expect } from 'vitest';
 import {
   GRAVITY, WORM_MOVE_ACCEL, WORM_MOVE_SPEED, JUMP_IMPULSE,

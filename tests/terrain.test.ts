@@ -1,4 +1,3 @@
-// tests/terrain.test.js
 import { describe, it, expect } from 'vitest';
 import { createTerrain, generateSilhouetteMask, isSolid, carveCircle, findSurfaceY } from '../src/terrain.js';
 

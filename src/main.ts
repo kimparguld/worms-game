@@ -6,16 +6,17 @@ import { createProjectile, updateProjectile } from './projectile.js';
 import { raycastHit, WEAPONS } from './weapons.js';
 import { fireRope, updateRopeSwing } from './rope.js';
 import { renderFrame } from './render.js';
+import type { Worm, WormInput, Team, Projectile, Rope, WeaponKey } from './types.js';
 
-const WEAPON_KEYS = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
+const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const canvas = document.getElementById('game') as HTMLCanvasElement;
+const ctx = canvas.getContext('2d')!;
 
 const terrain = createTerrain(canvas.width, canvas.height);
 const SPAWN_SURFACE_BUFFER = 20; // px above the actual terrain surface, so worms fall a small, consistent distance
-const spawnY = (x) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
-const teams = [
+const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
+const teams: Team[] = [
   { playerId: 'p1', worms: [createWorm(150, spawnY(150), 'p1', 'W1'), createWorm(200, spawnY(200), 'p1', 'W2')] },
   { playerId: 'p2', worms: [createWorm(760, spawnY(760), 'p2', 'W3'), createWorm(810, spawnY(810), 'p2', 'W4')] },
 ];
@@ -23,25 +24,25 @@ const match = createMatch(teams);
 const input = createInputState();
 attachInputListeners(input, window);
 
-let projectiles = [];
-let rope = null;
+let projectiles: Projectile[] = [];
+let rope: Rope | null = null;
 let charging = false;
 let chargePower = 0;
-let retirementTimer = null;
-let winner = null;
+let retirementTimer: number | null = null;
+let winner: string | null = null;
 let lastTime = performance.now();
 
-function allWorms() {
+function allWorms(): Worm[] {
   return teams.flatMap((t) => t.worms);
 }
 
-function fireWeapon(worm, weaponKey, power) {
+function fireWeapon(worm: Worm, weaponKey: WeaponKey, power: number): void {
   const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
 
   if (weaponKey === 'shotgun') {
     for (let i = 0; i < WEAPONS.shotgun.pellets; i++) {
-      const hit = raycastHit(terrain, allWorms(), worm.x, worm.y, fireAngle, WEAPONS.shotgun.range);
-      if (hit.type === 'worm') takeDamage(hit.worm, WEAPONS.shotgun.maxDamage);
+      const hit = raycastHit(terrain, allWorms(), worm.x, worm.y, fireAngle, WEAPONS.shotgun.range!);
+      if (hit.type === 'worm' && hit.worm) takeDamage(hit.worm, WEAPONS.shotgun.maxDamage);
     }
     retirementTimer = 1;
   } else if (weaponKey === 'ninjaRope') {
@@ -53,7 +54,7 @@ function fireWeapon(worm, weaponKey, power) {
   }
 }
 
-function update(dt) {
+function update(dt: number): void {
   const active = currentWorm(match);
   const worm = active.worm;
   const weaponKey = WEAPON_KEYS[input.selectedWeapon - 1];
@@ -65,7 +66,7 @@ function update(dt) {
   }
 
   // Apply physics to all worms: real input for active worm, neutral input for others
-  const neutralInput = { left: false, right: false, jump: false };
+  const neutralInput: WormInput = { left: false, right: false, jump: false };
   for (const w of allWorms()) {
     const wormInput = w === worm ? input : neutralInput;
     updateWormPhysics(w, terrain, wormInput, dt);
@@ -111,7 +112,7 @@ function update(dt) {
   if (result) winner = result;
 }
 
-function loop(now) {
+function loop(now: number): void {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 

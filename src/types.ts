@@ -1,0 +1,112 @@
+export interface Terrain {
+  width: number;
+  height: number;
+  mask: Uint8Array;
+}
+
+export interface Worm {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  team: string;
+  name: string;
+  facing: 1 | -1;
+  aimAngle: number;
+  alive: boolean;
+  onGround: boolean;
+}
+
+export interface WormInput {
+  left: boolean;
+  right: boolean;
+  jump: boolean;
+}
+
+export interface Team {
+  playerId: string;
+  worms: Worm[];
+}
+
+export interface TurnEntry {
+  playerId: string;
+  worm: Worm;
+}
+
+export interface MatchState {
+  teams: Team[];
+  turnOrder: TurnEntry[];
+  currentIndex: number;
+  turnTimeRemaining: number;
+  wind: number;
+}
+
+export interface InputState {
+  left: boolean;
+  right: boolean;
+  aimUp: boolean;
+  aimDown: boolean;
+  jump: boolean;
+  firing: boolean;
+  endTurnRequested: boolean;
+  selectedWeapon: number;
+}
+
+export type WeaponKey = 'bazooka' | 'grenade' | 'shotgun' | 'ninjaRope' | 'dynamite';
+
+export interface WeaponDef {
+  key: WeaponKey;
+  maxDamage: number;
+  blastRadius: number;
+  craterRadius: number;
+  chargeable: boolean;
+  minSpeed: number;
+  maxSpeed: number;
+  gravity: boolean;
+  windAffected: boolean;
+  fuseTime: number | null;
+  hitscan: boolean;
+  pellets: number;
+  bounces: boolean;
+  range?: number;
+}
+
+export interface Projectile {
+  weaponKey: WeaponKey;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  fuseRemaining: number | null;
+  alive: boolean;
+}
+
+export interface ProjectileUpdateResult {
+  exploded: boolean;
+}
+
+export interface Rope {
+  attached: boolean;
+  anchorX: number | null;
+  anchorY: number | null;
+  length: number;
+}
+
+export interface RaycastHit {
+  type: 'worm' | 'terrain' | 'none';
+  worm?: Worm;
+  x: number;
+  y: number;
+  distance: number;
+}
+
+export interface Vector2 {
+  x: number;
+  y: number;
+}
+
+export interface ProjectileIntegration {
+  pos: Vector2;
+  vel: Vector2;
+}
