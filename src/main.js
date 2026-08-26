@@ -118,7 +118,7 @@ function loop(now) {
   if (!winner) update(dt);
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  renderFrame(ctx, terrain, allWorms(), projectiles, match, input.selectedWeapon);
+  renderFrame(ctx, terrain, allWorms(), projectiles, match, input.selectedWeapon, rope);
 
   if (winner) {
     ctx.fillStyle = '#fff';
