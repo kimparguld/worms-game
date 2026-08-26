@@ -1,6 +1,6 @@
 // tests/terrain.test.js
 import { describe, it, expect } from 'vitest';
-import { createTerrain, generateSilhouetteMask, isSolid, carveCircle } from '../src/terrain.js';
+import { createTerrain, generateSilhouetteMask, isSolid, carveCircle, findSurfaceY } from '../src/terrain.js';
 
 describe('generateSilhouetteMask', () => {
   it('produces empty sky in the upper region and solid ground in the lower region', () => {
@@ -25,6 +25,24 @@ describe('isSolid', () => {
     const terrain = createTerrain(10, 10);
     expect(isSolid(terrain, -1, 5)).toBe(false);
     expect(isSolid(terrain, 5, 100)).toBe(false);
+  });
+});
+
+describe('findSurfaceY', () => {
+  it('returns the known ground height for flat terrain', () => {
+    const width = 50, height = 50, groundY = 30;
+    const terrain = createTerrain(width, height);
+    terrain.mask.fill(0);
+    for (let x = 0; x < width; x++) {
+      for (let y = groundY; y < height; y++) terrain.mask[y * width + x] = 1;
+    }
+    expect(findSurfaceY(terrain, 25)).toBe(groundY);
+  });
+
+  it('returns terrain.height when the column is never solid (e.g. a carved hole)', () => {
+    const terrain = createTerrain(20, 20);
+    terrain.mask.fill(0);
+    expect(findSurfaceY(terrain, 10)).toBe(terrain.height);
   });
 });
 

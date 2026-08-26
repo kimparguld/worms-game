@@ -1,4 +1,4 @@
-import { createTerrain } from './terrain.js';
+import { createTerrain, findSurfaceY } from './terrain.js';
 import { createWorm, updateWormPhysics, adjustAim, takeDamage } from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer, checkWinner } from './game.js';
 import { createInputState, attachInputListeners } from './input.js';
@@ -13,9 +13,11 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 const terrain = createTerrain(canvas.width, canvas.height);
+const SPAWN_SURFACE_BUFFER = 20; // px above the actual terrain surface, so worms fall a small, consistent distance
+const spawnY = (x) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
 const teams = [
-  { playerId: 'p1', worms: [createWorm(150, 100, 'p1', 'W1'), createWorm(200, 100, 'p1', 'W2')] },
-  { playerId: 'p2', worms: [createWorm(760, 100, 'p2', 'W3'), createWorm(810, 100, 'p2', 'W4')] },
+  { playerId: 'p1', worms: [createWorm(150, spawnY(150), 'p1', 'W1'), createWorm(200, spawnY(200), 'p1', 'W2')] },
+  { playerId: 'p2', worms: [createWorm(760, spawnY(760), 'p2', 'W3'), createWorm(810, spawnY(810), 'p2', 'W4')] },
 ];
 const match = createMatch(teams);
 const input = createInputState();

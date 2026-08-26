@@ -2,6 +2,7 @@ import { isSolid } from './terrain.js';
 import {
   GRAVITY, WORM_MOVE_ACCEL, WORM_MOVE_SPEED, JUMP_IMPULSE,
   FALL_DAMAGE_VELOCITY_THRESHOLD, FALL_DAMAGE_PER_VELOCITY, STARTING_HP,
+  WORM_STEP_HEIGHT,
 } from './constants.js';
 
 export function createWorm(x, y, team, name) {
@@ -40,7 +41,13 @@ export function updateWormPhysics(worm, terrain, input, dt) {
 
   const nextX = worm.x + worm.vx * dt;
   if (isSolid(terrain, nextX, worm.y)) {
-    worm.vx = 0;
+    if (worm.onGround && !isSolid(terrain, nextX, worm.y - WORM_STEP_HEIGHT)) {
+      // Small slope/step: let the worm climb it instead of stopping dead.
+      worm.x = nextX;
+      worm.y -= WORM_STEP_HEIGHT;
+    } else {
+      worm.vx = 0;
+    }
   } else {
     worm.x = nextX;
   }

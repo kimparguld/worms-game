@@ -7,3 +7,4 @@ export const FALL_DAMAGE_PER_VELOCITY = 0.2; // damage per px/s of impact speed 
 export const TURN_DURATION_MS = 45000;
 export const STARTING_HP = 100;
 export const WIND_MAX = 50; // px/s^2, max magnitude of per-turn wind acceleration
+export const WORM_STEP_HEIGHT = 10; // px the worm can step up per frame when moving horizontally while grounded

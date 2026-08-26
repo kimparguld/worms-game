@@ -20,6 +20,13 @@ export function isSolid(terrain, x, y) {
   return terrain.mask[yi * terrain.width + xi] === 1;
 }
 
+export function findSurfaceY(terrain, x) {
+  for (let y = 0; y < terrain.height; y++) {
+    if (isSolid(terrain, x, y)) return y;
+  }
+  return terrain.height;
+}
+
 export function carveCircle(terrain, cx, cy, radius) {
   const minX = Math.max(0, Math.floor(cx - radius));
   const maxX = Math.min(terrain.width - 1, Math.ceil(cx + radius));
