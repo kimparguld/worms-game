@@ -28,6 +28,8 @@ export class EndScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.time.delayedCall(750, () => {
+      // Non-null: safe unless the Phaser config explicitly disables
+      // keyboard input (input.keyboard: false), which it does not here.
       this.input.keyboard!.once('keydown', () => {
         this.scene.start('GameScene');
       });
