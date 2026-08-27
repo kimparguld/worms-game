@@ -110,3 +110,14 @@ export interface ProjectileIntegration {
   pos: Vector2;
   vel: Vector2;
 }
+
+export interface MatchRuntime {
+  terrain: Terrain;
+  teams: Team[];
+  match: MatchState;
+  projectiles: Projectile[];
+  rope: Rope | null;
+  charging: boolean;
+  chargePower: number;
+  retirementTimer: number | null;
+}
