@@ -4,6 +4,7 @@ import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
 import type { InputState, Team, MatchRuntime } from '../src/types.js';
+import { STARTING_HP } from '../src/constants.js';
 
 function makeInput(overrides: Partial<InputState> = {}): InputState {
   return {
@@ -35,6 +36,13 @@ function twoWormTeams(): Team[] {
   return [
     { playerId: 'p1', worms: [createWorm(50, 149, 'p1', 'A')] },
     { playerId: 'p2', worms: [createWorm(150, 149, 'p2', 'B')] },
+  ];
+}
+
+function fourWormTeams(): Team[] {
+  return [
+    { playerId: 'p1', worms: [createWorm(50, 149, 'p1', 'A'), createWorm(70, 149, 'p1', 'B')] },
+    { playerId: 'p2', worms: [createWorm(150, 149, 'p2', 'C'), createWorm(170, 149, 'p2', 'D')] },
   ];
 }
 
@@ -86,13 +94,21 @@ describe('stepMatch dead-worm guard', () => {
     const worm = teams[0].worms[0];
     worm.alive = false;
     const originalAngle = worm.aimAngle;
+    const originalX = worm.x;
+    const originalY = worm.y;
     const rt = makeRuntime(teams);
     rt.rope = { attached: true, anchorX: 60, anchorY: 100, length: 50 };
-    const input = makeInput({ firing: true, aimUp: true, selectedWeapon: 1 });
+    // selectedWeapon 5 (dynamite) is NOT chargeable, so firing:true would
+    // create a projectile immediately if the dead-worm guard were missing.
+    const input = makeInput({ firing: true, aimUp: true, selectedWeapon: 5 });
 
     stepMatch(rt, input, 0.5);
 
     expect(worm.aimAngle).toBe(originalAngle);
+    // If the guard didn't also cover rope-swing, updateRopeSwing would have
+    // moved this worm noticeably toward the (60, 100) anchor.
+    expect(worm.x).toBe(originalX);
+    expect(worm.y).toBe(originalY);
     expect(rt.projectiles).toHaveLength(0);
     expect(rt.charging).toBe(false);
     expect(rt.rope).not.toBeNull();
@@ -110,6 +126,7 @@ describe('stepMatch retirement timer', () => {
     stepMatch(rt, input, 0.02);
 
     expect(rt.match.currentIndex).toBe(beforeIndex);
+    expect(rt.retirementTimer).not.toBeNull();
   });
 });
 
@@ -120,7 +137,7 @@ describe('stepMatch turn-timer / retirement interaction', () => {
     rt.retirementTimer = 999; // stale, left over from a previous, already-resolved shot
     rt.charging = true;
     rt.chargePower = 0.5;
-    const input = makeInput();
+    const input = makeInput({ firing: true });
 
     stepMatch(rt, input, 0.01); // 10ms tick expires the 5ms-remaining turn timer
 
@@ -135,7 +152,7 @@ describe('stepMatch turn-timer / retirement interaction', () => {
     rt.retirementTimer = 999;
     rt.charging = true;
     rt.chargePower = 0.5;
-    const input = makeInput({ endTurnRequested: true });
+    const input = makeInput({ endTurnRequested: true, firing: true });
 
     stepMatch(rt, input, 0.016);
 
@@ -143,6 +160,71 @@ describe('stepMatch turn-timer / retirement interaction', () => {
     expect(rt.retirementTimer).toBeNull();
     expect(rt.charging).toBe(false);
     expect(input.endTurnRequested).toBe(false);
+  });
+});
+
+describe('stepMatch charge state does not leak across a retirement-driven turn advance', () => {
+  it('does not let the next worm inherit charge state from the retirement timer ending the previous turn', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.retirementTimer = 0.01;
+    const input = makeInput({ firing: true, selectedWeapon: 1 }); // bazooka, chargeable
+
+    stepMatch(rt, input, 0.02); // retirement timer expires this frame, turn advances to worm B
+
+    expect(rt.match.currentIndex).toBe(1);
+    expect(rt.charging).toBe(false);
+    expect(rt.chargePower).toBe(0);
+
+    input.firing = false;
+    stepMatch(rt, input, 0.016); // worm B releases fire - must NOT launch a shot it never charged
+
+    expect(rt.projectiles).toHaveLength(0);
+  });
+});
+
+describe('stepMatch clears the rope when the turn advances', () => {
+  it("does not let the incoming worm's rope-swing run from the previous worm's stale rope", () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.rope = { attached: true, anchorX: 60, anchorY: 100, length: 50 };
+    const input = makeInput({ endTurnRequested: true });
+
+    stepMatch(rt, input, 0.016); // turn advances to worm B this frame
+
+    expect(rt.match.currentIndex).toBe(1);
+    expect(rt.rope).toBeNull();
+
+    const wormB = rt.teams[1].worms[0];
+    const beforeX = wormB.x;
+    const beforeY = wormB.y;
+
+    stepMatch(rt, makeInput(), 0.016); // worm B's first real frame - must not swing on a stale rope
+
+    expect(Math.hypot(wormB.x - beforeX, wormB.y - beforeY)).toBeLessThan(5);
+  });
+});
+
+describe('stepMatch does not double-advance when the turn timer and a voluntary end-turn coincide', () => {
+  it('advances the turn exactly once, not twice, in the same frame', () => {
+    const rt = makeRuntime(fourWormTeams());
+    rt.match.turnTimeRemaining = 5;
+    const input = makeInput({ endTurnRequested: true });
+
+    stepMatch(rt, input, 0.01); // 10ms tick expires the 5ms-remaining turn timer, and endTurnRequested is also set
+
+    expect(rt.match.currentIndex).toBe(1); // exactly one worm's turn skipped, not two
+  });
+});
+
+describe('stepMatch shotgun does not damage its own shooter', () => {
+  it('excludes the active worm from its own shotgun blast', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const shooter = rt.match.turnOrder[0].worm;
+    shooter.aimAngle = -Math.PI / 2; // aimed straight up, into empty sky - nothing else to hit
+    const input = makeInput({ firing: true, selectedWeapon: 3 });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(shooter.hp).toBe(STARTING_HP);
   });
 });
 
@@ -159,10 +241,17 @@ describe('stepMatch rope handling', () => {
 });
 
 describe('stepMatch weapon-index guard', () => {
-  it('falls back to a valid weapon instead of throwing when selectedWeapon is out of range', () => {
+  it('falls back to bazooka instead of throwing when selectedWeapon is out of range', () => {
     const rt = makeRuntime(twoWormTeams());
-    const input = makeInput({ selectedWeapon: 99 });
+    const input = makeInput({ firing: true, selectedWeapon: 99 });
 
-    expect(() => stepMatch(rt, input, 0.016)).not.toThrow();
+    expect(() => stepMatch(rt, input, 0.2)).not.toThrow();
+    expect(rt.charging).toBe(true); // charging the fallback weapon (bazooka, chargeable)
+
+    input.firing = false;
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.projectiles).toHaveLength(1);
+    expect(rt.projectiles[0].weaponKey).toBe('bazooka');
   });
 });

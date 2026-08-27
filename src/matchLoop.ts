@@ -100,28 +100,37 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     updateProjectile(p, rt.terrain, allWorms(rt), rt.match.wind, dt);
   }
 
+  // Tracks whether the turn advanced through ANY of the three paths below,
+  // captured explicitly (not inferred from currentIndex) so every path's
+  // in-flight state - charge, rope, retirement - gets cleared uniformly,
+  // including the retirement path's own advance, which used to be missed.
+  let turnAdvanced = false;
+
   if (rt.retirementTimer !== null) {
     rt.retirementTimer -= dt;
-    if (rt.retirementTimer <= 0 && rt.projectiles.every((p) => !p.alive)) {
+    if (rt.retirementTimer <= 0 && rt.projectiles.length === 0) {
       advanceTurn(rt.match);
-      rt.retirementTimer = null;
+      turnAdvanced = true;
     }
   }
 
-  const beforeIndex = rt.match.currentIndex;
-  tickTurnTimer(rt.match, dt * 1000);
+  if (!turnAdvanced && tickTurnTimer(rt.match, dt * 1000)) {
+    turnAdvanced = true;
+  }
 
   if (input.endTurnRequested) {
-    advanceTurn(rt.match);
+    if (!turnAdvanced && advanceTurn(rt.match)) {
+      turnAdvanced = true;
+    }
     input.endTurnRequested = false;
   }
 
-  // If the turn advanced through either path this frame (timer expiry or a
-  // voluntary end-turn), any in-flight retirement/charge state belonged to
-  // the previous worm and must not bleed into the new one.
-  if (rt.match.currentIndex !== beforeIndex) {
+  // Whichever path ended the turn, in-flight state belonged to the
+  // previous worm and must not bleed into the new one.
+  if (turnAdvanced) {
     rt.retirementTimer = null;
     rt.charging = false;
     rt.chargePower = 0;
+    rt.rope = null;
   }
 }

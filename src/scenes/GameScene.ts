@@ -23,9 +23,9 @@ export class GameScene extends Phaser.Scene {
     const { width, height } = this.scale;
     this.rt = createMatchRuntime(width, height);
 
+    if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
     // Non-null: the line above always removes any colliding key first, so
     // createCanvas never actually returns null here.
-    if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
     this.terrainTexture = this.textures.createCanvas('terrainTex', width, height)!;
     this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
 

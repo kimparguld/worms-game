@@ -22,7 +22,7 @@ export function currentWorm(matchState: MatchState): TurnEntry {
   return matchState.turnOrder[matchState.currentIndex];
 }
 
-export function advanceTurn(matchState: MatchState): void {
+export function advanceTurn(matchState: MatchState): boolean {
   const n = matchState.turnOrder.length;
   for (let i = 1; i <= n; i++) {
     const idx = (matchState.currentIndex + i) % n;
@@ -30,14 +30,16 @@ export function advanceTurn(matchState: MatchState): void {
       matchState.currentIndex = idx;
       matchState.turnTimeRemaining = TURN_DURATION_MS;
       matchState.wind = randomWind();
-      return;
+      return true;
     }
   }
+  return false;
 }
 
-export function tickTurnTimer(matchState: MatchState, dtMs: number): void {
+export function tickTurnTimer(matchState: MatchState, dtMs: number): boolean {
   matchState.turnTimeRemaining -= dtMs;
-  if (matchState.turnTimeRemaining <= 0) advanceTurn(matchState);
+  if (matchState.turnTimeRemaining <= 0) return advanceTurn(matchState);
+  return false;
 }
 
 export function checkWinner(teams: Team[]): string | null {
