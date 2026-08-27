@@ -11,6 +11,26 @@ describe('generateSilhouetteMask', () => {
   });
 });
 
+describe('generateSilhouetteMask cliffs', () => {
+  it('carves at least one near-vertical wall face for the ninja rope to grapple', () => {
+    const width = 200, height = 200;
+    const mask = generateSilhouetteMask(width, height);
+    let maxJump = 0;
+    for (let x = 1; x < width; x++) {
+      let prevHeight = 0;
+      for (let y = 0; y < height; y++) {
+        if (mask[y * width + (x - 1)] === 1) { prevHeight = height - y; break; }
+      }
+      let curHeight = 0;
+      for (let y = 0; y < height; y++) {
+        if (mask[y * width + x] === 1) { curHeight = height - y; break; }
+      }
+      maxJump = Math.max(maxJump, Math.abs(curHeight - prevHeight));
+    }
+    expect(maxJump).toBeGreaterThan(height * 0.15);
+  });
+});
+
 describe('isSolid', () => {
   it('returns true only where the mask is 1', () => {
     const terrain = createTerrain(10, 10);
