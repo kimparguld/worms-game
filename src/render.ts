@@ -1,16 +1,9 @@
+import type Phaser from 'phaser';
 import type { Terrain, Worm, Projectile, MatchState, Rope } from './types.js';
 
-export function renderFrame(
-  ctx: CanvasRenderingContext2D,
-  terrain: Terrain,
-  worms: Worm[],
-  projectiles: Projectile[],
-  matchState: MatchState,
-  selectedWeapon: number,
-  rope: Rope | null,
-): void {
+export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Terrain): void {
   const { width, height } = terrain;
-  const imageData = ctx.createImageData(width, height);
+  const imageData = texture.context.createImageData(width, height);
   for (let i = 0; i < terrain.mask.length; i++) {
     const solid = terrain.mask[i] === 1;
     const o = i * 4;
@@ -19,52 +12,55 @@ export function renderFrame(
     imageData.data[o + 2] = solid ? 51 : 255;
     imageData.data[o + 3] = 255;
   }
-  ctx.putImageData(imageData, 0, 0);
+  texture.context.putImageData(imageData, 0, 0);
+  texture.refresh();
+}
+
+export function drawScene(
+  graphics: Phaser.GameObjects.Graphics,
+  worms: Worm[],
+  projectiles: Projectile[],
+  matchState: MatchState,
+  rope: Rope | null,
+): void {
+  graphics.clear();
 
   const active = matchState.turnOrder[matchState.currentIndex];
 
-  // Draw rope visualization if attached
   if (rope && rope.anchorX != null && rope.anchorY != null) {
     const worm = active.worm;
-    const ropeColor = '#8d6e63';
-
-    ctx.strokeStyle = ropeColor;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(worm.x, worm.y);
-    ctx.lineTo(rope.anchorX, rope.anchorY);
-    ctx.stroke();
-
-    ctx.fillStyle = ropeColor;
-    ctx.beginPath();
-    ctx.arc(rope.anchorX, rope.anchorY, 4, 0, Math.PI * 2);
-    ctx.fill();
+    graphics.lineStyle(2, 0x8d6e63, 1);
+    graphics.lineBetween(worm.x, worm.y, rope.anchorX, rope.anchorY);
+    graphics.fillStyle(0x8d6e63, 1);
+    graphics.fillCircle(rope.anchorX, rope.anchorY, 4);
   }
 
   for (const worm of worms) {
     if (!worm.alive) continue;
-    ctx.fillStyle = active && worm === active.worm ? '#ffee58' : '#e0e0e0';
-    ctx.beginPath();
-    ctx.arc(worm.x, worm.y, 8, 0, Math.PI * 2);
-    ctx.fill();
+    graphics.fillStyle(active && worm === active.worm ? 0xffee58 : 0xe0e0e0, 1);
+    graphics.fillCircle(worm.x, worm.y, 8);
 
-    ctx.fillStyle = '#000';
-    ctx.fillRect(worm.x - 12, worm.y - 18, 24, 4);
-    ctx.fillStyle = '#4caf50';
-    ctx.fillRect(worm.x - 12, worm.y - 18, 24 * (worm.hp / 100), 4);
+    graphics.fillStyle(0x000000, 1);
+    graphics.fillRect(worm.x - 12, worm.y - 18, 24, 4);
+    graphics.fillStyle(0x4caf50, 1);
+    graphics.fillRect(worm.x - 12, worm.y - 18, 24 * (worm.hp / 100), 4);
   }
 
-  ctx.fillStyle = '#ff5722';
+  graphics.fillStyle(0xff5722, 1);
   for (const projectile of projectiles) {
     if (!projectile.alive) continue;
-    ctx.beginPath();
-    ctx.arc(projectile.x, projectile.y, 3, 0, Math.PI * 2);
-    ctx.fill();
+    graphics.fillCircle(projectile.x, projectile.y, 3);
   }
+}
 
-  ctx.fillStyle = '#fff';
-  ctx.font = '16px sans-serif';
-  ctx.fillText(`Wind: ${matchState.wind.toFixed(1)}`, 10, 20);
-  ctx.fillText(`Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s`, 10, 40);
-  ctx.fillText(`Weapon: ${selectedWeapon}`, 10, 60);
+export function updateHud(
+  hudText: Phaser.GameObjects.Text,
+  matchState: MatchState,
+  selectedWeapon: number,
+): void {
+  hudText.setText(
+    `Wind: ${matchState.wind.toFixed(1)}\n` +
+      `Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s\n` +
+      `Weapon: ${selectedWeapon}`,
+  );
 }
