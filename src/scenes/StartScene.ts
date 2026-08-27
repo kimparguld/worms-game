@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { drawSky } from '../render.js';
 
 const CONTROLS = [
   'Arrow Left / Right - Move',
@@ -15,17 +16,50 @@ export class StartScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.cameras.main.setBackgroundColor('#1b2430');
+    this.cameras.main.setBackgroundColor('#16213f');
     const centerX = this.scale.width / 2;
+    const centerY = this.scale.height / 2;
 
-    this.add.text(centerX, 60, 'WORMS', { fontSize: '48px', color: '#ffffff' }).setOrigin(0.5, 0);
+    const sky = this.add.graphics();
+    drawSky(sky, this.scale.width, this.scale.height);
+    sky.setAlpha(0.35);
 
     this.add
-      .text(centerX, 150, CONTROLS.join('\n'), { fontSize: '18px', color: '#e0e0e0', align: 'center' })
+      .text(centerX, 55, 'WORMS', {
+        fontFamily: "'Baloo 2', sans-serif",
+        fontSize: '64px',
+        fontStyle: '800',
+        color: '#fff8e7',
+        stroke: '#16213f',
+        strokeThickness: 8,
+      })
+      .setOrigin(0.5, 0);
+
+    const panelWidth = 520;
+    const panelHeight = 230;
+    const panel = this.add.graphics();
+    panel.fillStyle(0x0f172e, 0.65);
+    panel.fillRoundedRect(centerX - panelWidth / 2, centerY - panelHeight / 2 - 10, panelWidth, panelHeight, 16);
+    panel.lineStyle(2, 0xffffff, 0.12);
+    panel.strokeRoundedRect(centerX - panelWidth / 2, centerY - panelHeight / 2 - 10, panelWidth, panelHeight, 16);
+
+    this.add
+      .text(centerX, centerY - panelHeight / 2 + 16, CONTROLS.join('\n'), {
+        fontFamily: "'Baloo 2', sans-serif",
+        fontSize: '19px',
+        color: '#fff8e7',
+        align: 'center',
+        lineSpacing: 8,
+      })
       .setOrigin(0.5, 0);
 
     this.add
-      .text(centerX, 460, 'Press any key to start', { fontSize: '20px', color: '#ffee58' })
+      .text(centerX, 462, 'Press any key to start', {
+        fontFamily: "'Baloo 2', sans-serif",
+        fontSize: '22px',
+        fontStyle: '700',
+        color: '#ffd966',
+      })
       .setOrigin(0.5, 0);
 
     this.time.delayedCall(750, () => {

@@ -8,6 +8,6 @@ new Phaser.Game({
   width: 960,
   height: 540,
   parent: 'game-container',
-  backgroundColor: '#6ec6ff',
+  backgroundColor: '#6ec3f4',
   scene: [StartScene, GameScene, EndScene],
 });

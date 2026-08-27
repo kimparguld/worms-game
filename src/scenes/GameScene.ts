@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { createMatchRuntime, stepMatch } from '../matchLoop.js';
 import { checkWinner } from '../game.js';
-import { drawTerrain, drawScene, updateHud } from '../render.js';
+import { drawTerrain, drawScene, updateHud, drawSky } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
 import type { Worm, MatchRuntime } from '../types.js';
@@ -23,6 +23,11 @@ export class GameScene extends Phaser.Scene {
     const { width, height } = this.scale;
     this.rt = createMatchRuntime(width, height);
 
+    // Static sky/cloud backdrop, drawn once - it never changes during a
+    // match, unlike the terrain (destructible) and worms (moving) above it.
+    const sky = this.add.graphics();
+    drawSky(sky, width, height);
+
     if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
     // Non-null: the line above always removes any colliding key first, so
     // createCanvas never actually returns null here.
@@ -30,7 +35,19 @@ export class GameScene extends Phaser.Scene {
     this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
 
     this.graphics = this.add.graphics();
-    this.hudText = this.add.text(10, 10, '', { fontSize: '16px', color: '#ffffff' });
+
+    const hudPanel = this.add.graphics();
+    hudPanel.fillStyle(0x16213f, 0.72);
+    hudPanel.fillRoundedRect(6, 6, 150, 74, 10);
+    hudPanel.lineStyle(2, 0xffffff, 0.15);
+    hudPanel.strokeRoundedRect(6, 6, 150, 74, 10);
+
+    this.hudText = this.add.text(18, 16, '', {
+      fontFamily: "'Baloo 2', sans-serif",
+      fontSize: '17px',
+      color: '#fff8e7',
+      lineSpacing: 4,
+    });
 
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
