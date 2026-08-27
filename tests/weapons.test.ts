@@ -58,4 +58,12 @@ describe('raycastHit', () => {
     expect(hit.type).toBe('worm');
     expect(hit.worm).toBe(worm);
   });
+
+  it('excludes the shooter from its own raycast', () => {
+    const terrain = createTerrain(100, 100);
+    terrain.mask.fill(0);
+    const shooter = createWorm(50, 50, 'p1', 'Shooter');
+    const hit = raycastHit(terrain, [shooter], 50, 50, 0, 200, shooter);
+    expect(hit.type).toBe('none');
+  });
 });
