@@ -27,6 +27,7 @@ export function drawScene(
 
   const active = matchState.turnOrder[matchState.currentIndex];
 
+  // Draw rope visualization if attached
   if (rope && rope.anchorX != null && rope.anchorY != null) {
     const worm = active.worm;
     graphics.lineStyle(2, 0x8d6e63, 1);

@@ -11,9 +11,8 @@ import { resetInputState } from '../input.js';
 import type { Worm, WormInput, Team, Projectile, Rope, WeaponKey, Terrain, MatchState } from '../types.js';
 
 const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
+// px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
-const WIDTH = 960;
-const HEIGHT = 540;
 
 export class GameScene extends Phaser.Scene {
   private terrain!: Terrain;
@@ -36,7 +35,8 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     resetInputState(sharedInput);
 
-    this.terrain = createTerrain(WIDTH, HEIGHT);
+    const { width, height } = this.scale;
+    this.terrain = createTerrain(width, height);
     const spawnY = (x: number) => findSurfaceY(this.terrain, x) - SPAWN_SURFACE_BUFFER;
     this.teams = [
       { playerId: 'p1', worms: [createWorm(150, spawnY(150), 'p1', 'W1'), createWorm(200, spawnY(200), 'p1', 'W2')] },
@@ -50,7 +50,7 @@ export class GameScene extends Phaser.Scene {
     this.retirementTimer = null;
 
     if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
-    this.terrainTexture = this.textures.createCanvas('terrainTex', WIDTH, HEIGHT)!;
+    this.terrainTexture = this.textures.createCanvas('terrainTex', width, height)!;
     this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
 
     this.graphics = this.add.graphics();
@@ -96,11 +96,13 @@ export class GameScene extends Phaser.Scene {
     const worm = active.worm;
     const weaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1];
 
+    // Apply rope-swing logic only to the active worm when rope is attached
     if (this.rope) {
       updateRopeSwing(worm, this.rope, dt);
       if (sharedInput.jump) this.rope = null;
     }
 
+    // Apply physics to all worms: real input for active worm, neutral input for others
     const neutralInput: WormInput = { left: false, right: false, jump: false };
     for (const w of this.allWorms()) {
       const wormInput = w === worm ? sharedInput : neutralInput;

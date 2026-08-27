@@ -15,6 +15,7 @@ export class StartScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.cameras.main.setBackgroundColor('#1b2430');
     const centerX = this.scale.width / 2;
 
     this.add.text(centerX, 60, 'WORMS', { fontSize: '48px', color: '#ffffff' }).setOrigin(0.5, 0);
@@ -27,8 +28,10 @@ export class StartScene extends Phaser.Scene {
       .text(centerX, 460, 'Press any key to start', { fontSize: '20px', color: '#ffee58' })
       .setOrigin(0.5, 0);
 
-    this.input.keyboard!.once('keydown', () => {
-      this.scene.start('GameScene');
+    this.time.delayedCall(750, () => {
+      this.input.keyboard!.once('keydown', () => {
+        this.scene.start('GameScene');
+      });
     });
   }
 }

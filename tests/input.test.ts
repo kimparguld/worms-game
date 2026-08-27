@@ -27,7 +27,9 @@ describe('resetInputState', () => {
   it('clears all held/requested flags and resets weapon selection to 1', () => {
     const state = createInputState();
     state.left = true;
+    state.right = true;
     state.aimUp = true;
+    state.aimDown = true;
     state.jump = true;
     state.firing = true;
     state.endTurnRequested = true;
@@ -36,7 +38,9 @@ describe('resetInputState', () => {
     resetInputState(state);
 
     expect(state.left).toBe(false);
+    expect(state.right).toBe(false);
     expect(state.aimUp).toBe(false);
+    expect(state.aimDown).toBe(false);
     expect(state.jump).toBe(false);
     expect(state.firing).toBe(false);
     expect(state.endTurnRequested).toBe(false);
