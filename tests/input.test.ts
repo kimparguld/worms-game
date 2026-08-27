@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { keyToAction, createInputState } from '../src/input.js';
+import { keyToAction, createInputState, resetInputState } from '../src/input.js';
 
 describe('keyToAction', () => {
   it('maps movement and action keys', () => {
@@ -20,5 +20,26 @@ describe('createInputState', () => {
     const state = createInputState();
     expect(state.selectedWeapon).toBe(1);
     expect(state.left).toBe(false);
+  });
+});
+
+describe('resetInputState', () => {
+  it('clears all held/requested flags and resets weapon selection to 1', () => {
+    const state = createInputState();
+    state.left = true;
+    state.aimUp = true;
+    state.jump = true;
+    state.firing = true;
+    state.endTurnRequested = true;
+    state.selectedWeapon = 4;
+
+    resetInputState(state);
+
+    expect(state.left).toBe(false);
+    expect(state.aimUp).toBe(false);
+    expect(state.jump).toBe(false);
+    expect(state.firing).toBe(false);
+    expect(state.endTurnRequested).toBe(false);
+    expect(state.selectedWeapon).toBe(1);
   });
 });

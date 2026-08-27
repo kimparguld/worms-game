@@ -50,3 +50,14 @@ export function attachInputListeners(inputState: InputState, target: EventTarget
     else if (action === 'fire') inputState.firing = false;
   });
 }
+
+export function resetInputState(state: InputState): void {
+  state.left = false;
+  state.right = false;
+  state.aimUp = false;
+  state.aimDown = false;
+  state.jump = false;
+  state.firing = false;
+  state.endTurnRequested = false;
+  state.selectedWeapon = 1;
+}
