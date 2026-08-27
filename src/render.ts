@@ -1,9 +1,19 @@
 import type Phaser from 'phaser';
+import { STARTING_HP } from './constants.js';
 import type { Terrain, Worm, Projectile, MatchState, Rope } from './types.js';
+
+let cachedImageData: ImageData | null = null;
+let cachedWidth = 0;
+let cachedHeight = 0;
 
 export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Terrain): void {
   const { width, height } = terrain;
-  const imageData = texture.context.createImageData(width, height);
+  if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
+    cachedImageData = texture.context.createImageData(width, height);
+    cachedWidth = width;
+    cachedHeight = height;
+  }
+  const imageData = cachedImageData;
   for (let i = 0; i < terrain.mask.length; i++) {
     const solid = terrain.mask[i] === 1;
     const o = i * 4;
@@ -36,6 +46,22 @@ export function drawScene(
     graphics.fillCircle(rope.anchorX, rope.anchorY, 4);
   }
 
+  // Draw a crosshair showing the active worm's current aim direction
+  if (active && active.worm.alive) {
+    const worm = active.worm;
+    const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
+    const innerRadius = 14;
+    const outerRadius = 26;
+    const startX = worm.x + Math.cos(fireAngle) * innerRadius;
+    const startY = worm.y + Math.sin(fireAngle) * innerRadius;
+    const endX = worm.x + Math.cos(fireAngle) * outerRadius;
+    const endY = worm.y + Math.sin(fireAngle) * outerRadius;
+    graphics.lineStyle(2, 0xffffff, 0.9);
+    graphics.lineBetween(startX, startY, endX, endY);
+    graphics.fillStyle(0xffffff, 0.9);
+    graphics.fillCircle(endX, endY, 3);
+  }
+
   for (const worm of worms) {
     if (!worm.alive) continue;
     graphics.fillStyle(active && worm === active.worm ? 0xffee58 : 0xe0e0e0, 1);
@@ -44,7 +70,7 @@ export function drawScene(
     graphics.fillStyle(0x000000, 1);
     graphics.fillRect(worm.x - 12, worm.y - 18, 24, 4);
     graphics.fillStyle(0x4caf50, 1);
-    graphics.fillRect(worm.x - 12, worm.y - 18, 24 * (worm.hp / 100), 4);
+    graphics.fillRect(worm.x - 12, worm.y - 18, 24 * (worm.hp / STARTING_HP), 4);
   }
 
   graphics.fillStyle(0xff5722, 1);
