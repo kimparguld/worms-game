@@ -1,4 +1,12 @@
+import { WATER_BAND_HEIGHT_FRACTION } from './constants.js';
 import type { Terrain } from './types.js';
+
+// The Y coordinate of the water's surface - fixed at the bottom of the map,
+// beneath the deepest a mountain/cliff/building can generate, so it's only
+// ever revealed where terrain has been dug or blown away down to it.
+export function waterLevelY(terrain: Terrain): number {
+  return terrain.height * (1 - WATER_BAND_HEIGHT_FRACTION);
+}
 
 // Mountain silhouette: a base flat line plus a few random sine "octaves"
 // summed together, so each match gets a differently-shaped mountain range
@@ -31,12 +39,12 @@ const CLIFF_RISE_MAX_FRACTION = 0.3;
 const MAX_GROUND_HEIGHT_FRACTION = 0.72;
 
 // The four fixed worm spawn X columns, expressed as fractions of the game's
-// real 960px width (150, 200, 760, 810 - see createMatchRuntime in
-// matchLoop.ts), so this works for any terrain width, including the smaller
-// widths the tests exercise. Cliffs and buildings are kept clear of these
-// columns (plus a margin) so a worm can never spawn walled in by a cliff
-// face, or on top of / squeezed against a building.
-const SPAWN_EXCLUSION_FRACTIONS = [0.156, 0.208, 0.792, 0.844];
+// width so this works at any resolution - createMatchRuntime in matchLoop.ts
+// imports this same array to place worms at exactly these columns, so the
+// two always agree. Cliffs and buildings are kept clear of these columns
+// (plus a margin) so a worm can never spawn walled in by a cliff face, or on
+// top of / squeezed against a building.
+export const SPAWN_EXCLUSION_FRACTIONS = [0.156, 0.208, 0.792, 0.844];
 // ~38px at 960 width - wide enough to keep a cliff/building's edge, not just
 // its center, clear of the spawn column.
 const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
@@ -174,8 +182,49 @@ function applyCliffs(heights: Float64Array, width: number, height: number): void
   if (randomInt(1, 2) === 2) applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85));
 }
 
+const LAKE_COUNT_MIN = 1;
+const LAKE_COUNT_MAX = 2;
+const LAKE_WIDTH_MIN_FRACTION = 0.05;
+const LAKE_WIDTH_MAX_FRACTION = 0.12;
+// A lake's center dips to just below the water line (see waterLevelY), so
+// its deepest point is guaranteed-exposed open water - not just low ground -
+// while a sine falloff blends it back up to the surrounding natural terrain
+// at its edges, for a basin instead of a hard-edged pit.
+const LAKE_TARGET_HEIGHT_FRACTION = WATER_BAND_HEIGHT_FRACTION * 0.75;
+
+function pickLakeCenterFraction(halfWidthFraction: number): number {
+  return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction);
+}
+
+function applyLakes(heights: Float64Array, width: number, height: number): void {
+  const count = randomInt(LAKE_COUNT_MIN, LAKE_COUNT_MAX);
+  const targetHeight = height * LAKE_TARGET_HEIGHT_FRACTION;
+  for (let i = 0; i < count; i++) {
+    const lakeWidth = Math.max(
+      1,
+      Math.round(randomBetween(width * LAKE_WIDTH_MIN_FRACTION, width * LAKE_WIDTH_MAX_FRACTION)),
+    );
+    const halfWidthFraction = lakeWidth / width / 2;
+    const centerX = Math.round(pickLakeCenterFraction(halfWidthFraction) * width);
+    const minX = Math.max(0, centerX - Math.round(lakeWidth / 2));
+    const maxX = Math.min(width - 1, centerX + Math.round(lakeWidth / 2));
+    const span = Math.max(1, maxX - minX);
+    for (let x = minX; x <= maxX; x++) {
+      // 0 at the lake's edges, 1 at its center.
+      const basinShape = Math.sin(((x - minX) / span) * Math.PI);
+      heights[x] = heights[x] * (1 - basinShape) + targetHeight * basinShape;
+    }
+  }
+}
+
 function computeGroundHeights(width: number, height: number): Float64Array {
   const heights = computeMountainHeights(width, height);
+  // Lakes before cliffs: applyCliff always overwrites its own span with a
+  // plateau raised by a fixed fraction above its (possibly lake-lowered)
+  // boundary, so the cliff's wall-face jump is preserved regardless of a
+  // lake landing nearby - reversed, a lake applied after could soften or
+  // erase the cliff's face entirely.
+  applyLakes(heights, width, height);
   applyCliffs(heights, width, height);
   return heights;
 }
@@ -237,13 +286,17 @@ export function generateSilhouetteMask(width: number, height: number): Uint8Arra
   const heights = computeGroundHeights(width, height);
   const naturalHeights = heights.slice();
   const buildingColumns = applyBuildings(heights, width, height);
+  // No column is ever solid this far down, regardless of its generated
+  // height - it's reserved for water, only ever exposed where terrain gets
+  // dug or blown away down to it.
+  const waterStartY = height * (1 - WATER_BAND_HEIGHT_FRACTION);
 
   for (let x = 0; x < width; x++) {
     const groundHeight = heights[x];
     const isBuildingColumn = buildingColumns.has(x);
     const naturalHeight = naturalHeights[x];
     for (let y = 0; y < height; y++) {
-      if (y < height - groundHeight) {
+      if (y < height - groundHeight || y >= waterStartY) {
         mask[y * width + x] = 0;
       } else if (isBuildingColumn && y < height - naturalHeight) {
         mask[y * width + x] = 2;

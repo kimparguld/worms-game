@@ -1,4 +1,4 @@
-import { isSolid } from './terrain.js';
+import { isSolid, waterLevelY } from './terrain.js';
 import {
   GRAVITY, WORM_MOVE_ACCEL, WORM_MOVE_SPEED, JUMP_IMPULSE,
   FALL_DAMAGE_VELOCITY_THRESHOLD, FALL_DAMAGE_PER_VELOCITY, STARTING_HP,
@@ -93,7 +93,10 @@ export function updateWormPhysics(worm: Worm, terrain: Terrain, input: WormInput
     worm.onGround = false;
   }
 
-  if (worm.y > terrain.height + 50) {
+  // Water kills instantly, no death animation - it's a different way to go
+  // than taking lethal damage, and the visible splash effect (added by the
+  // caller when it sees alive flip to false here) stands in for it.
+  if (worm.y > waterLevelY(terrain)) {
     worm.alive = false;
     worm.hp = 0;
     worm.dying = false;

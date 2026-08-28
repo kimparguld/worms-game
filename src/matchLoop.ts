@@ -1,11 +1,14 @@
-import { findSurfaceY, createTerrain } from './terrain.js';
+import { findSurfaceY, createTerrain, waterLevelY, SPAWN_EXCLUSION_FRACTIONS } from './terrain.js';
 import { createWorm, updateWormPhysics, adjustAim, takeDamage, tickDeathAnimation } from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js';
 import { createProjectile, updateProjectile } from './projectile.js';
 import { raycastHit, WEAPONS } from './weapons.js';
-import { fireRope, updateRopeSwing } from './rope.js';
-import { TURN_BANNER_DURATION_MS, ROPE_HOP_IMPULSE } from './constants.js';
-import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime } from './types.js';
+import { fireRope, updateRopeSwing, adjustRopeLength } from './rope.js';
+import {
+  TURN_BANNER_DURATION_MS, ROPE_HOP_IMPULSE, SHOTGUN_TRACER_DURATION,
+  EXPLOSION_EFFECT_DURATION, SPLASH_EFFECT_DURATION,
+} from './constants.js';
+import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2 } from './types.js';
 
 export const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
 // px above the actual terrain surface, so worms fall a small, consistent distance
@@ -19,9 +22,12 @@ export function createMatchRuntime(
 ): MatchRuntime {
   const terrain = createTerrain(width, height);
   const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
+  // Spawn columns scale with width via the same fractions terrain.ts keeps
+  // cliffs/buildings/lakes clear of - see SPAWN_EXCLUSION_FRACTIONS.
+  const [p1aX, p1bX, p2aX, p2bX] = SPAWN_EXCLUSION_FRACTIONS.map((f) => Math.round(f * width));
   const teams: Team[] = [
-    { playerId: 'p1', name: team1Name, worms: [createWorm(150, spawnY(150), 'p1', 'W1'), createWorm(200, spawnY(200), 'p1', 'W2')] },
-    { playerId: 'p2', name: team2Name, worms: [createWorm(760, spawnY(760), 'p2', 'W3'), createWorm(810, spawnY(810), 'p2', 'W4')] },
+    { playerId: 'p1', name: team1Name, worms: [createWorm(p1aX, spawnY(p1aX), 'p1', 'W1'), createWorm(p1bX, spawnY(p1bX), 'p1', 'W2')] },
+    { playerId: 'p2', name: team2Name, worms: [createWorm(p2aX, spawnY(p2aX), 'p2', 'W3'), createWorm(p2bX, spawnY(p2bX), 'p2', 'W4')] },
   ];
   return {
     terrain,
@@ -34,6 +40,9 @@ export function createMatchRuntime(
     retirementTimer: null,
     turnBannerTimer: TURN_BANNER_DURATION_MS,
     gravestones: [],
+    shotgunTracer: null,
+    explosions: [],
+    splashes: [],
   };
 }
 
@@ -45,13 +54,19 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
   const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
 
   if (weaponKey === 'shotgun') {
+    const hits: Vector2[] = [];
     for (let i = 0; i < WEAPONS.shotgun.pellets; i++) {
       // Non-null: shotgun's range is always defined (see WEAPONS.shotgun
       // above); the '?' on WeaponDef.range exists only because other
       // weapons omit it.
       const hit = raycastHit(rt.terrain, allWorms(rt), worm.x, worm.y, fireAngle, WEAPONS.shotgun.range!, worm);
       if (hit.type === 'worm' && hit.worm) takeDamage(hit.worm, WEAPONS.shotgun.maxDamage);
+      hits.push({ x: hit.x, y: hit.y });
     }
+    // The shotgun deals damage via an instant raycast with nothing added to
+    // rt.projectiles, so without this tracer a shot is completely invisible
+    // on screen - hit or miss - which reads as the weapon doing nothing.
+    rt.shotgunTracer = { originX: worm.x, originY: worm.y, hits, timer: SHOTGUN_TRACER_DURATION };
     rt.retirementTimer = 1;
   } else if (weaponKey === 'ninjaRope') {
     const result = fireRope(worm.x, worm.y, fireAngle, rt.terrain, 300);
@@ -87,7 +102,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   if (canAct) {
     // Apply rope-swing logic only to the active worm when rope is attached
     if (rt.rope) {
-      updateRopeSwing(worm, rt.rope, dt);
+      updateRopeSwing(worm, rt.rope, dt, rt.terrain);
       if (input.jump) rt.rope = null;
     }
   }
@@ -96,34 +111,69 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   const neutralInput: WormInput = { left: false, right: false, jump: false };
   for (const w of allWorms(rt)) {
     const wormInput = w === worm ? input : neutralInput;
+    const wasAlive = w.alive;
     updateWormPhysics(w, rt.terrain, wormInput, dt);
+    // alive flipping straight to false (skipping the dying/wiggle state) only
+    // happens on water contact - takeDamage-driven deaths always pass through
+    // `dying` first, so this cleanly identifies a water death.
+    if (wasAlive && !w.alive) {
+      rt.splashes.push({ x: w.x, y: waterLevelY(rt.terrain), timer: SPLASH_EFFECT_DURATION });
+    }
     if (tickDeathAnimation(w, dt * 1000)) {
       rt.gravestones.push({ x: w.x, y: w.y });
     }
   }
 
   if (canAct) {
-    if (input.aimUp) adjustAim(worm, -1, dt);
-    if (input.aimDown) adjustAim(worm, 1, dt);
+    // While swinging on the rope, up/down arrows reel it in/out instead of
+    // aiming - aiming is meaningless mid-swing since fireAngle isn't used
+    // for anything until the rope is released.
+    if (rt.rope) {
+      if (input.aimUp) adjustRopeLength(rt.rope, -1, dt);
+      if (input.aimDown) adjustRopeLength(rt.rope, 1, dt);
+    } else {
+      if (input.aimUp) adjustAim(worm, -1, dt);
+      if (input.aimDown) adjustAim(worm, 1, dt);
+    }
 
-    const chargeableWeapon = WEAPONS[weaponKey].chargeable;
-    if (input.firing && chargeableWeapon) {
-      rt.charging = true;
-      rt.chargePower = Math.min(1, rt.chargePower + dt);
-    } else if (rt.charging) {
-      fireWeapon(rt, worm, weaponKey, rt.chargePower);
-      rt.charging = false;
-      rt.chargePower = 0;
-    } else if (input.firing && !chargeableWeapon) {
-      fireWeapon(rt, worm, weaponKey, 1);
-      input.firing = false;
+    // A shot already fired this turn is waiting to resolve (retirementTimer
+    // set) - without this guard, firing again here (e.g. a held-down fire
+    // key re-triggering the charge branch) pushes a second projectile and
+    // resets retirementTimer, which can repeatedly postpone the turn ending
+    // until the 45s turn timer finally rescues it.
+    if (rt.retirementTimer === null) {
+      const chargeableWeapon = WEAPONS[weaponKey].chargeable;
+      if (input.firing && chargeableWeapon) {
+        rt.charging = true;
+        rt.chargePower = Math.min(1, rt.chargePower + dt);
+      } else if (rt.charging) {
+        fireWeapon(rt, worm, weaponKey, rt.chargePower);
+        rt.charging = false;
+        rt.chargePower = 0;
+      } else if (input.firing && !chargeableWeapon) {
+        fireWeapon(rt, worm, weaponKey, 1);
+        input.firing = false;
+      }
     }
   }
 
   rt.projectiles = rt.projectiles.filter((p) => p.alive);
   for (const p of rt.projectiles) {
-    updateProjectile(p, rt.terrain, allWorms(rt), rt.match.wind, dt);
+    const result = updateProjectile(p, rt.terrain, allWorms(rt), rt.match.wind, dt);
+    if (result.exploded) {
+      rt.explosions.push({ x: p.x, y: p.y, radius: WEAPONS[p.weaponKey].craterRadius, timer: EXPLOSION_EFFECT_DURATION });
+    }
   }
+
+  if (rt.shotgunTracer) {
+    rt.shotgunTracer.timer -= dt;
+    if (rt.shotgunTracer.timer <= 0) rt.shotgunTracer = null;
+  }
+
+  for (const e of rt.explosions) e.timer -= dt;
+  rt.explosions = rt.explosions.filter((e) => e.timer > 0);
+  for (const s of rt.splashes) s.timer -= dt;
+  rt.splashes = rt.splashes.filter((s) => s.timer > 0);
 
   // Tracks whether the turn advanced through ANY of the three paths below,
   // captured explicitly (not inferred from currentIndex) so every path's
@@ -158,5 +208,6 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     rt.chargePower = 0;
     rt.rope = null;
     rt.turnBannerTimer = TURN_BANNER_DURATION_MS;
+    rt.shotgunTracer = null;
   }
 }

@@ -4,7 +4,8 @@ import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
 import type { InputState, Team, MatchRuntime } from '../src/types.js';
-import { STARTING_HP, TURN_BANNER_DURATION_MS } from '../src/constants.js';
+import { STARTING_HP, TURN_BANNER_DURATION_MS, SHOTGUN_TRACER_DURATION } from '../src/constants.js';
+import { WEAPONS } from '../src/weapons.js';
 
 function makeInput(overrides: Partial<InputState> = {}): InputState {
   return {
@@ -31,6 +32,9 @@ function makeRuntime(teams: Team[]): MatchRuntime {
     retirementTimer: null,
     turnBannerTimer: null,
     gravestones: [],
+    shotgunTracer: null,
+    explosions: [],
+    splashes: [],
   };
 }
 
@@ -61,6 +65,7 @@ describe('createMatchRuntime', () => {
     expect(rt.retirementTimer).toBeNull();
     expect(rt.turnBannerTimer).toBe(TURN_BANNER_DURATION_MS);
     expect(rt.gravestones).toEqual([]);
+    expect(rt.shotgunTracer).toBeNull();
   });
 
   it('defaults team names to "Team 1" and "Team 2" when none are given', () => {
@@ -101,6 +106,27 @@ describe('stepMatch charge/fire state machine', () => {
     expect(rt.projectiles).toHaveLength(1);
     expect(rt.projectiles[0].weaponKey).toBe('dynamite');
     expect(input.firing).toBe(false);
+  });
+
+  it('does not let a second shot be fired while the first is still pending, so the turn reliably ends', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const input = makeInput({ firing: true, selectedWeapon: 1 }); // bazooka, chargeable
+
+    stepMatch(rt, input, 0.2); // charge
+    input.firing = false;
+    stepMatch(rt, input, 0.016); // release - fires the first shot
+    expect(rt.projectiles).toHaveLength(1);
+    const firstRetirementTimer = rt.retirementTimer;
+    expect(firstRetirementTimer).not.toBeNull();
+
+    // Player presses fire again while the first shot is still in flight -
+    // this must not start a new charge or reset the retirement timer.
+    input.firing = true;
+    stepMatch(rt, input, 0.2);
+
+    expect(rt.charging).toBe(false);
+    expect(rt.projectiles).toHaveLength(1);
+    expect(rt.retirementTimer).toBeLessThanOrEqual(firstRetirementTimer!);
   });
 });
 
@@ -281,6 +307,32 @@ describe('stepMatch shotgun does not damage its own shooter', () => {
   });
 });
 
+describe('stepMatch shotgun tracer', () => {
+  it('sets a tracer from the shooter to each pellet endpoint when the shotgun fires', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const shooter = rt.match.turnOrder[0].worm;
+    const input = makeInput({ firing: true, selectedWeapon: 3 });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.shotgunTracer).not.toBeNull();
+    expect(rt.shotgunTracer!.originX).toBe(shooter.x);
+    expect(rt.shotgunTracer!.originY).toBe(shooter.y);
+    expect(rt.shotgunTracer!.hits).toHaveLength(WEAPONS.shotgun.pellets);
+  });
+
+  it('clears the tracer once its display duration elapses', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const input = makeInput({ firing: true, selectedWeapon: 3 });
+    stepMatch(rt, input, 0.016);
+    expect(rt.shotgunTracer).not.toBeNull();
+
+    stepMatch(rt, makeInput(), SHOTGUN_TRACER_DURATION + 0.01);
+
+    expect(rt.shotgunTracer).toBeNull();
+  });
+});
+
 describe('stepMatch rope handling', () => {
   it('detaches the rope when jump is pressed while swinging', () => {
     const rt = makeRuntime(twoWormTeams());
@@ -316,6 +368,40 @@ describe('stepMatch ninja rope hop', () => {
 
     expect(rt.rope).toBeNull();
     expect(worm.vy).toBeGreaterThanOrEqual(0); // no upward hop - just this frame's normal gravity
+  });
+});
+
+describe('stepMatch ninja rope contract/expand', () => {
+  it('shortens the rope length when aimUp is pressed while swinging', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.rope = { attached: true, anchorX: 60, anchorY: 100, length: 100 };
+    const input = makeInput({ aimUp: true });
+
+    stepMatch(rt, input, 0.1);
+
+    expect(rt.rope.length).toBeLessThan(100);
+  });
+
+  it('lengthens the rope length when aimDown is pressed while swinging', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.rope = { attached: true, anchorX: 60, anchorY: 100, length: 100 };
+    const input = makeInput({ aimDown: true });
+
+    stepMatch(rt, input, 0.1);
+
+    expect(rt.rope.length).toBeGreaterThan(100);
+  });
+
+  it('does not change the worm aim angle while adjusting rope length', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    const originalAngle = worm.aimAngle;
+    rt.rope = { attached: true, anchorX: 60, anchorY: 100, length: 100 };
+    const input = makeInput({ aimUp: true });
+
+    stepMatch(rt, input, 0.1);
+
+    expect(worm.aimAngle).toBe(originalAngle);
   });
 });
 
@@ -432,5 +518,34 @@ describe('stepMatch death animation', () => {
 
     expect(worm.dying).toBe(true);
     expect(rt.gravestones).toHaveLength(0);
+  });
+});
+
+describe('stepMatch water', () => {
+  it('kills a worm instantly and records a splash when it ends up in the water', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.y = 190; // past the water line (200 * (1 - 0.07) = 186) for this 200-tall test terrain
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.016);
+
+    expect(worm.alive).toBe(false);
+    expect(worm.dying).toBe(false);
+    expect(rt.splashes).toHaveLength(1);
+    expect(rt.splashes[0].x).toBeCloseTo(worm.x, 5);
+  });
+
+  it('does not record a splash for a worm dying from damage on dry land', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.hp = 0;
+    worm.dying = true;
+    worm.deathTimer = 10;
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.02);
+
+    expect(rt.splashes).toHaveLength(0);
   });
 });

@@ -43,6 +43,7 @@ export interface MatchState {
   currentIndex: number;
   turnTimeRemaining: number;
   wind: number;
+  teamWormPointer: Record<string, number>;
 }
 
 export interface InputState {
@@ -109,6 +110,26 @@ export interface Gravestone {
   y: number;
 }
 
+export interface Explosion {
+  x: number;
+  y: number;
+  radius: number;
+  timer: number;
+}
+
+export interface Splash {
+  x: number;
+  y: number;
+  timer: number;
+}
+
+export interface ShotgunTracer {
+  originX: number;
+  originY: number;
+  hits: Vector2[];
+  timer: number;
+}
+
 export interface Vector2 {
   x: number;
   y: number;
@@ -130,4 +151,7 @@ export interface MatchRuntime {
   retirementTimer: number | null;
   turnBannerTimer: number | null;
   gravestones: Gravestone[];
+  shotgunTracer: ShotgunTracer | null;
+  explosions: Explosion[];
+  splashes: Splash[];
 }

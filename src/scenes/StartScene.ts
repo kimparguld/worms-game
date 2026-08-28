@@ -43,7 +43,7 @@ export class StartScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0);
 
-    const panelWidth = 520;
+    const panelWidth = 720;
     const panelHeight = 230;
     const panel = this.add.graphics();
     panel.fillStyle(0x0f172e, 0.65);
@@ -63,7 +63,7 @@ export class StartScene extends Phaser.Scene {
 
     this.nameText = [
       this.add
-        .text(centerX, 392, '', {
+        .text(centerX, 520, '', {
           fontFamily: "'Baloo 2', sans-serif",
           fontSize: '22px',
           fontStyle: '700',
@@ -71,7 +71,7 @@ export class StartScene extends Phaser.Scene {
         })
         .setOrigin(0.5, 0),
       this.add
-        .text(centerX, 422, '', {
+        .text(centerX, 560, '', {
           fontFamily: "'Baloo 2', sans-serif",
           fontSize: '22px',
           fontStyle: '700',
@@ -82,7 +82,7 @@ export class StartScene extends Phaser.Scene {
     this.refreshNameText();
 
     this.add
-      .text(centerX, 458, 'Type a team name  •  Tab to switch  •  Enter to start', {
+      .text(centerX, 488, 'Type a team name  •  Tab to switch  •  Enter to start', {
         fontFamily: "'Baloo 2', sans-serif",
         fontSize: '16px',
         fontStyle: '700',

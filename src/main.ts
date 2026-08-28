@@ -5,8 +5,8 @@ import { EndScene } from './scenes/EndScene.js';
 
 new Phaser.Game({
   type: Phaser.AUTO,
-  width: 960,
-  height: 540,
+  width: 1280,
+  height: 720,
   parent: 'game-container',
   backgroundColor: '#6ec3f4',
   scale: {

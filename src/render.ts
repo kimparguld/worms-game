@@ -1,8 +1,14 @@
 import type Phaser from 'phaser';
-import { STARTING_HP, DEATH_ANIM_DURATION_MS } from './constants.js';
+import {
+  STARTING_HP, DEATH_ANIM_DURATION_MS, SHOTGUN_TRACER_DURATION, WORM_MOVE_SPEED,
+  EXPLOSION_EFFECT_DURATION, SPLASH_EFFECT_DURATION, WATER_BAND_HEIGHT_FRACTION,
+} from './constants.js';
 import { WEAPON_KEYS } from './matchLoop.js';
 import { WEAPONS } from './weapons.js';
-import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team, Gravestone } from './types.js';
+import type {
+  Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team, Gravestone, ShotgunTracer,
+  Explosion, Splash,
+} from './types.js';
 
 let cachedImageData: ImageData | null = null;
 let cachedRunLength: Int32Array | null = null;
@@ -75,13 +81,15 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       let g: number;
       let b: number;
       if (depth < 2) {
-        // Dark lip along the very top of the roof, for a bit of depth.
-        r = 66; g = 70; b = 78;
+        // A bright sunlit lip along the roof's edge, instead of a dark
+        // outline, so the roofline still pops without an inked look.
+        r = 214; g = 218; b = 226;
       } else if (depth < BUILDING_ROOF_DEPTH) {
-        r = 90; g = 94; b = 102;
+        r = 118; g = 122; b = 132;
       } else if (atLeftEdge || atRightEdge) {
-        // Shaded corners so the facade reads as a solid volume.
-        r = 142; g = 96; b = 66;
+        // Soft warm shading (not a hard dark line) so the facade still
+        // reads as a solid volume at its corners.
+        r = 128; g = 90; b = 62;
       } else {
         const wy = depth - BUILDING_ROOF_DEPTH;
         const cellX = dx % BUILDING_WINDOW_PITCH_X;
@@ -115,17 +123,24 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
     } else if (cell === 1) {
       buildingRunLength[x] = 0;
       runLength[x]++;
-      if (runLength[x] <= GRASS_DEPTH) {
-        imageData.data[o] = 111;
-        imageData.data[o + 1] = 191;
-        imageData.data[o + 2] = 74;
-      } else if (runLength[x] <= DIRT_TRANSITION_DEPTH) {
-        imageData.data[o] = 139;
-        imageData.data[o + 1] = 90;
-        imageData.data[o + 2] = 43;
+      const depth = runLength[x];
+      if (depth === 1) {
+        // A bright sunlit rim along the grass's top edge, instead of a dark
+        // outline - reads as light catching the grass tips.
+        imageData.data[o] = 168;
+        imageData.data[o + 1] = 235;
+        imageData.data[o + 2] = 110;
+      } else if (depth <= GRASS_DEPTH) {
+        imageData.data[o] = 104;
+        imageData.data[o + 1] = 214;
+        imageData.data[o + 2] = 64;
+      } else if (depth <= DIRT_TRANSITION_DEPTH) {
+        imageData.data[o] = 150;
+        imageData.data[o + 1] = 96;
+        imageData.data[o + 2] = 46;
       } else {
-        imageData.data[o] = 90;
-        imageData.data[o + 1] = 58;
+        imageData.data[o] = 96;
+        imageData.data[o + 1] = 60;
         imageData.data[o + 2] = 30;
       }
       imageData.data[o + 3] = 255;
@@ -160,51 +175,254 @@ export function drawSky(graphics: Phaser.GameObjects.Graphics, width: number, he
   }
 }
 
-const TEAM_COLORS: Record<string, number> = { p1: 0x2fbfae, p2: 0xe85d75 };
-const BODY_COLOR = 0xf2a6a6;
-const BODY_SHADE_COLOR = 0xd97c7c;
+// Sits behind the terrain layer in the display list, so it's only ever
+// visible where terrain has been dug/blown away down to the water line -
+// see WATER_BAND_HEIGHT_FRACTION and terrain.ts's waterLevelY. Redrawn every
+// frame (unlike the static sky) so the surface highlight bands can animate.
+export function drawWater(graphics: Phaser.GameObjects.Graphics, width: number, height: number, timeMs: number): void {
+  graphics.clear();
+  const level = height * (1 - WATER_BAND_HEIGHT_FRACTION);
+  const band = height - level;
+  graphics.fillGradientStyle(0x2e8fc7, 0x2e8fc7, 0x0c3f6e, 0x0c3f6e, 1);
+  graphics.fillRect(0, level, width, band);
 
-function drawWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, isActive: boolean): void {
+  const t = timeMs / 1000;
+  const drawWave = (yOffset: number, freq: number, speed: number, amp: number, color: number, alpha: number, lineWidth: number) => {
+    graphics.lineStyle(lineWidth, color, alpha);
+    graphics.beginPath();
+    for (let x = 0; x <= width; x += 10) {
+      const y = level + yOffset + Math.sin(x * freq + t * speed) * amp;
+      if (x === 0) graphics.moveTo(x, y);
+      else graphics.lineTo(x, y);
+    }
+    graphics.strokePath();
+  };
+  drawWave(4, 0.05, 2.2, 2.5, 0x8fd8f7, 0.55, 2);
+  drawWave(10, 0.04, -1.6, 2, 0xcdeffb, 0.3, 1.5);
+}
+
+// Bold, saturated palette. Form reads through flat color + soft shading
+// (an underside shade ellipse, a glossy highlight) rather than hard black
+// outlines - a thin, low-alpha line is used only where two similarly-toned
+// shapes would otherwise merge (eyes against the head).
+const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
+const BODY_COLOR = 0xffb199;
+const BODY_SHADE_COLOR = 0xe0805a;
+const SOFT_LINE_COLOR = 0x8a4a4a;
+const HEAD_RADIUS = 10;
+
+// Tapering tail segments trailing behind the head - worms crawl, they don't
+// stand on legs, so this is the whole lower body.
+const SEGMENT_OFFSETS = [9, 17, 24]; // px behind the head along the facing axis
+const SEGMENT_RADII = [8.5, 7, 5.5];
+
+const CRAWL_HZ = 2.4; // wiggle cycles per second while actively crawling
+const CRAWL_AMPLITUDE = 3; // px of vertical travel per segment at full speed
+const IDLE_HZ = 0.6; // slow shared "breathing" bob while stationary
+const IDLE_BOB_AMPLITUDE = 1;
+
+// Deterministic per-worm phase offset (hashed from its name) so idle worms
+// don't all bob in perfect unison.
+function wormPhaseSeed(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return ((h % 1000) / 1000) * Math.PI * 2;
+}
+
+// Vertical bob for one point along the body (0 = head, 1..3 = tail segments,
+// outward from the head): a traveling wave while crawling - each segment lags
+// the one ahead of it, giving an inchworm ripple - or a gentle shared bob
+// while idle.
+function crawlOffsetY(worm: Worm, timeMs: number, point: number): number {
+  const move = Math.min(1, Math.abs(worm.vx) / WORM_MOVE_SPEED);
+  const t = timeMs / 1000;
+  if (move > 0.05) {
+    return Math.sin(t * CRAWL_HZ * Math.PI * 2 - point * 1.1) * CRAWL_AMPLITUDE * move;
+  }
+  const seed = wormPhaseSeed(worm.name);
+  return Math.sin(t * IDLE_HZ * Math.PI * 2 + seed - point * 0.5) * IDLE_BOB_AMPLITUDE;
+}
+
+function headPosition(worm: Worm, timeMs: number): { x: number; y: number } {
+  return { x: worm.x + worm.facing * 6, y: worm.y + crawlOffsetY(worm, timeMs, 0) };
+}
+
+// The worm's fist/weapon-grip point, just past the head along its facing
+// direction - shared by the arm nub in drawWorm and the weapon shapes in
+// drawHeldWeapon so both line up.
+function handPosition(worm: Worm, timeMs: number): { x: number; y: number } {
+  const head = headPosition(worm, timeMs);
+  return { x: head.x + worm.facing * 11, y: head.y + 2 };
+}
+
+// Drawn on the active worm only, at its hand, so it visibly carries whichever
+// weapon is currently selected - oriented along its aim for the two barrel
+// weapons, held statically for the lobbed/utility ones.
+function drawHeldWeapon(
+  graphics: Phaser.GameObjects.Graphics,
+  worm: Worm,
+  handX: number,
+  handY: number,
+  weaponKey: WeaponKey,
+): void {
+  const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
+
+  if (weaponKey === 'bazooka') {
+    const length = 20;
+    const endX = handX + Math.cos(fireAngle) * length;
+    const endY = handY + Math.sin(fireAngle) * length;
+    graphics.lineStyle(6, 0x5c5c66, 1);
+    graphics.lineBetween(handX, handY, endX, endY);
+    graphics.lineStyle(1.6, 0x3a3a42, 0.7);
+    graphics.lineBetween(handX, handY - 1.2, endX, endY - 1.2);
+    // Flared muzzle at the barrel tip
+    graphics.fillStyle(0x3a3a42, 1);
+    graphics.fillCircle(endX, endY, 4.5);
+  } else if (weaponKey === 'shotgun') {
+    // Short, fat, and light gunmetal gray - deliberately unlike the
+    // bazooka's long dark tube, so the two read as different guns even at
+    // normal gameplay scale, not just on close zoom.
+    graphics.save();
+    graphics.translateCanvas(handX, handY);
+    graphics.rotateCanvas(fireAngle);
+    graphics.fillStyle(0x8a5a2e, 1);
+    graphics.fillRoundedRect(-11, -3.5, 7, 7, 2);
+    graphics.fillStyle(0xb7bcc4, 1);
+    graphics.fillRoundedRect(-2, -4.5, 17, 9, 2.5);
+    graphics.lineStyle(1.2, 0x8a8f98, 0.8);
+    graphics.lineBetween(-2, 0, 15, 0);
+    graphics.restore();
+  } else if (weaponKey === 'grenade') {
+    graphics.fillStyle(0x3f7a2e, 1);
+    graphics.fillCircle(handX, handY, 6.5);
+    // Pineapple-style cross-hatch texture
+    graphics.lineStyle(1, 0x2e4a1c, 0.6);
+    graphics.lineBetween(handX - 4.5, handY, handX + 4.5, handY);
+    graphics.lineBetween(handX, handY - 4.5, handX, handY + 4.5);
+    graphics.lineBetween(handX - 3.2, handY - 3.2, handX + 3.2, handY + 3.2);
+    graphics.lineBetween(handX - 3.2, handY + 3.2, handX + 3.2, handY - 3.2);
+    graphics.fillStyle(0xffffff, 0.3);
+    graphics.fillCircle(handX - 2, handY - 2, 2);
+    graphics.lineStyle(1.6, 0x4a4a3a, 1);
+    graphics.lineBetween(handX, handY - 6.5, handX, handY - 9.5);
+    graphics.fillStyle(0xc9c9c9, 1);
+    graphics.fillCircle(handX, handY - 9.5, 1.9);
+  } else if (weaponKey === 'dynamite') {
+    // A bundle of three sticks reads more like cartoon TNT than one stick -
+    // a thin darker groove between each keeps them legible without a full
+    // outline.
+    for (const dx of [-3.5, 0, 3.5]) {
+      graphics.fillStyle(0xd7263d, 1);
+      graphics.fillRoundedRect(handX + dx - 1.6, handY - 7, 3.2, 13, 1.4);
+    }
+    graphics.lineStyle(0.8, 0x8a1220, 0.7);
+    graphics.lineBetween(handX - 1.9, handY - 7, handX - 1.9, handY + 6);
+    graphics.lineBetween(handX + 1.9, handY - 7, handX + 1.9, handY + 6);
+    graphics.lineStyle(1.4, 0x8a5a2a, 1);
+    graphics.lineBetween(handX, handY - 7, handX + 3, handY - 11);
+    graphics.fillStyle(0xffe58a, 1);
+    graphics.fillCircle(handX + 3, handY - 11, 1.8);
+  } else if (weaponKey === 'ninjaRope') {
+    graphics.lineStyle(2.2, 0x8a6a3a, 1);
+    graphics.beginPath();
+    graphics.arc(handX, handY, 6, 0, Math.PI * 1.3);
+    graphics.strokePath();
+    const hookX = handX + Math.cos(Math.PI * 1.3) * 6;
+    const hookY = handY + Math.sin(Math.PI * 1.3) * 6;
+    graphics.fillStyle(0x9a9aa2, 1);
+    graphics.fillCircle(hookX, hookY, 2.2);
+  }
+}
+
+function drawWorm(
+  graphics: Phaser.GameObjects.Graphics,
+  worm: Worm,
+  isActive: boolean,
+  timeMs: number,
+  heldWeapon?: WeaponKey,
+): void {
   const teamColor = TEAM_COLORS[worm.team] ?? 0xdddddd;
   const facing = worm.facing;
+  const head = headPosition(worm, timeMs);
+  const hand = handPosition(worm, timeMs);
 
-  // Soft ground shadow
-  graphics.fillStyle(0x000000, 0.18);
-  graphics.fillEllipse(worm.x, worm.y + 10, 20, 6);
+  // Soft ground shadow spanning the whole crawling body
+  graphics.fillStyle(0x000000, 0.2);
+  graphics.fillEllipse(worm.x - facing * 6, worm.y + 13, 38, 7);
 
   // Ring around the active worm - team color already carries the
   // team distinction, so the "it's your turn" marker uses a different
-  // (gold) color to stay legible against either team's bandana. Sized
-  // to clear the bandana rather than cut through it.
+  // (gold) color to stay legible against either team's headband.
   if (isActive) {
-    graphics.lineStyle(2.5, 0xffd966, 1);
-    graphics.strokeCircle(worm.x, worm.y - 1, 18);
+    graphics.lineStyle(3, 0xffd966, 1);
+    graphics.strokeCircle(head.x, head.y - 1, 17);
   }
 
-  // Body, with a subtle underside shade for a rounded, cartoon feel
-  graphics.fillStyle(BODY_COLOR, 1);
-  graphics.fillEllipse(worm.x, worm.y, 22, 17);
-  graphics.fillStyle(BODY_SHADE_COLOR, 0.6);
-  graphics.fillEllipse(worm.x, worm.y + 5, 17, 8);
+  // Tapering tail segments, drawn back-to-front so each overlaps cleanly
+  // under the segment ahead of it - no legs, worms crawl.
+  for (let i = SEGMENT_OFFSETS.length - 1; i >= 0; i--) {
+    const segX = worm.x - facing * SEGMENT_OFFSETS[i];
+    const segY = worm.y + 2 + crawlOffsetY(worm, timeMs, i + 1);
+    const r = SEGMENT_RADII[i];
+    graphics.fillStyle(BODY_COLOR, 1);
+    graphics.fillCircle(segX, segY, r);
+    graphics.fillStyle(BODY_SHADE_COLOR, 0.55);
+    graphics.fillEllipse(segX, segY + r * 0.4, r * 1.5, r * 0.7);
+  }
 
-  // Team-colored bandana across the top of the head
+  // Small resting arm nub on the foremost tail segment, opposite the arm
+  // holding the weapon.
+  const backArmX = worm.x - facing * 12;
+  const backArmY = worm.y + 3 + crawlOffsetY(worm, timeMs, 1);
+  graphics.fillStyle(BODY_COLOR, 1);
+  graphics.fillCircle(backArmX, backArmY, 4.5);
+
+  // Head, with a subtle underside shade and a glossy highlight for a
+  // rounded, toy-like cartoon feel.
+  graphics.fillStyle(BODY_COLOR, 1);
+  graphics.fillCircle(head.x, head.y, HEAD_RADIUS);
+  graphics.fillStyle(BODY_SHADE_COLOR, 0.6);
+  graphics.fillEllipse(head.x, head.y + 5, 15, 7);
+  graphics.fillStyle(0xffffff, 0.35);
+  graphics.fillEllipse(head.x - facing * 3, head.y - 5, 7, 4.5);
+
+  // Front arm, reaching from the head to the fist/weapon-grip point.
+  graphics.lineStyle(6, BODY_COLOR, 1);
+  graphics.lineBetween(head.x + facing * 3, head.y + 4, hand.x, hand.y);
+  graphics.fillStyle(BODY_COLOR, 1);
+  graphics.fillCircle(hand.x, hand.y, 4);
+
+  // Team-colored headband, with a knotted tail flapping out the back.
+  const tailBaseX = head.x - facing * 7;
+  const tailTipX = head.x - facing * 14;
   graphics.fillStyle(teamColor, 1);
-  graphics.fillEllipse(worm.x, worm.y - 6, 20, 7);
+  graphics.fillTriangle(tailBaseX, head.y - 8, tailTipX, head.y - 11, tailTipX + facing * 3, head.y - 3);
+  graphics.fillEllipse(head.x, head.y - 6, 20, 7);
 
   // Eyes, offset toward the direction the worm is facing
-  const eyeOffsetX = facing * 5;
+  const eyeOffsetX = facing * 4;
   graphics.fillStyle(0xffffff, 1);
-  graphics.fillCircle(worm.x + eyeOffsetX - 3, worm.y - 2, 3.4);
-  graphics.fillCircle(worm.x + eyeOffsetX + 4, worm.y - 2, 3.4);
+  graphics.fillCircle(head.x + eyeOffsetX - 3, head.y - 2, 4);
+  graphics.fillCircle(head.x + eyeOffsetX + 4, head.y - 2, 4);
+  graphics.lineStyle(1, SOFT_LINE_COLOR, 0.45);
+  graphics.strokeCircle(head.x + eyeOffsetX - 3, head.y - 2, 4);
+  graphics.strokeCircle(head.x + eyeOffsetX + 4, head.y - 2, 4);
   graphics.fillStyle(0x1c1c1c, 1);
-  graphics.fillCircle(worm.x + eyeOffsetX - 3 + facing, worm.y - 2, 1.6);
-  graphics.fillCircle(worm.x + eyeOffsetX + 4 + facing, worm.y - 2, 1.6);
+  graphics.fillCircle(head.x + eyeOffsetX - 3 + facing, head.y - 2, 1.9);
+  graphics.fillCircle(head.x + eyeOffsetX + 4 + facing, head.y - 2, 1.9);
+
+  // Expressive eyebrows for a bit of cartoon attitude
+  graphics.lineStyle(1.8, SOFT_LINE_COLOR, 0.75);
+  graphics.lineBetween(head.x + eyeOffsetX - 6, head.y - 6.5, head.x + eyeOffsetX - 1, head.y - 8);
+  graphics.lineBetween(head.x + eyeOffsetX + 2, head.y - 8, head.x + eyeOffsetX + 7, head.y - 6.5);
 
   // A small smile for personality
-  graphics.lineStyle(1.4, 0x8a4a4a, 0.8);
+  graphics.lineStyle(1.6, 0x8a4a4a, 0.85);
   graphics.beginPath();
-  graphics.arc(worm.x + eyeOffsetX + 1, worm.y + 3, 3.5, (20 * Math.PI) / 180, (160 * Math.PI) / 180);
+  graphics.arc(head.x + eyeOffsetX + 1, head.y + 3, 3.6, (20 * Math.PI) / 180, (160 * Math.PI) / 180);
   graphics.strokePath();
+
+  if (isActive && heldWeapon) drawHeldWeapon(graphics, worm, hand.x, hand.y, heldWeapon);
 }
 
 const DEATH_WIGGLE_END_FRACTION = 0.8; // last 20% of the animation is the "poof" burst instead of the wiggle
@@ -241,8 +459,65 @@ function drawDyingWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, elapse
   graphics.rotateCanvas(rotation);
   graphics.scaleCanvas(scale, scale);
   graphics.translateCanvas(-worm.x, -worm.y);
-  drawWorm(graphics, worm, false);
+  drawWorm(graphics, worm, false, elapsedMs);
   graphics.restore();
+}
+
+// Fireball + shockwave + a few radiating sparks, scaled by the weapon's
+// crater radius so a dynamite blast reads as bigger than a bazooka's.
+export function drawExplosions(graphics: Phaser.GameObjects.Graphics, explosions: Explosion[]): void {
+  for (const ex of explosions) {
+    const fraction = Math.max(0, Math.min(1, 1 - ex.timer / EXPLOSION_EFFECT_DURATION));
+    const fadeAlpha = 1 - fraction;
+    const flashAlpha = Math.max(0, 1 - fraction * 3);
+    const shockRadius = ex.radius * (0.7 + fraction * 2);
+    const coreRadius = ex.radius * (0.35 + fraction * 0.5);
+
+    graphics.lineStyle(3, 0xfff2b0, fadeAlpha * 0.8);
+    graphics.strokeCircle(ex.x, ex.y, shockRadius);
+
+    const sparkCount = 7;
+    for (let i = 0; i < sparkCount; i++) {
+      const angle = (i / sparkCount) * Math.PI * 2 + (ex.x % 7) * 0.3;
+      const innerR = coreRadius * 0.5;
+      const outerR = coreRadius * (1.1 + 0.5 * ((i % 3) / 2));
+      graphics.lineStyle(2.5, 0xffb347, fadeAlpha * 0.7);
+      graphics.lineBetween(
+        ex.x + Math.cos(angle) * innerR, ex.y + Math.sin(angle) * innerR,
+        ex.x + Math.cos(angle) * outerR, ex.y + Math.sin(angle) * outerR,
+      );
+    }
+
+    graphics.fillStyle(0xff5a1a, fadeAlpha * 0.9);
+    graphics.fillCircle(ex.x, ex.y, coreRadius);
+    graphics.fillStyle(0xffb347, fadeAlpha);
+    graphics.fillCircle(ex.x, ex.y, coreRadius * 0.6);
+    graphics.fillStyle(0xfff8e0, flashAlpha);
+    graphics.fillCircle(ex.x, ex.y, coreRadius * 0.4);
+  }
+}
+
+// A quick expanding ring plus a few droplets, at the water's surface, so a
+// worm's death-by-water reads as a splash rather than a silent disappearance.
+export function drawSplashes(graphics: Phaser.GameObjects.Graphics, splashes: Splash[]): void {
+  for (const sp of splashes) {
+    const fraction = Math.max(0, Math.min(1, 1 - sp.timer / SPLASH_EFFECT_DURATION));
+    const alpha = 1 - fraction;
+    const ringRadius = 6 + fraction * 22;
+
+    graphics.lineStyle(2.5, 0xdff3fb, alpha * 0.8);
+    graphics.strokeCircle(sp.x, sp.y, ringRadius);
+
+    const dropletCount = 5;
+    for (let i = 0; i < dropletCount; i++) {
+      const angle = -Math.PI / 2 + (i - (dropletCount - 1) / 2) * 0.4;
+      const dist = 4 + fraction * 16;
+      const dx = sp.x + Math.cos(angle) * dist;
+      const dy = sp.y - fraction * 14 + Math.sin(angle) * dist * 0.4;
+      graphics.fillStyle(0xbfe8fb, alpha * 0.85);
+      graphics.fillCircle(dx, dy, 1.8 - fraction * 1.2);
+    }
+  }
 }
 
 export function drawGravestones(graphics: Phaser.GameObjects.Graphics, gravestones: Gravestone[]): void {
@@ -288,6 +563,11 @@ export function projectileBlinkOn(fuseRemaining: number, fuseTime: number): bool
   return Math.sin(phase * Math.PI * 2) >= 0;
 }
 
+export function tracerAlpha(timer: number, duration: number): number {
+  if (duration <= 0) return 0;
+  return Math.max(0, Math.min(1, timer / duration));
+}
+
 export function drawScene(
   graphics: Phaser.GameObjects.Graphics,
   worms: Worm[],
@@ -297,9 +577,25 @@ export function drawScene(
   charging: boolean,
   chargePower: number,
   gravestones: Gravestone[],
+  shotgunTracer: ShotgunTracer | null,
+  activeWeaponKey: WeaponKey,
+  timeMs: number,
+  explosions: Explosion[],
+  splashes: Splash[],
 ): void {
   graphics.clear();
   drawGravestones(graphics, gravestones);
+  drawSplashes(graphics, splashes);
+
+  if (shotgunTracer) {
+    const alpha = tracerAlpha(shotgunTracer.timer, SHOTGUN_TRACER_DURATION);
+    graphics.lineStyle(2, 0xfff2b0, alpha);
+    for (const hit of shotgunTracer.hits) {
+      graphics.lineBetween(shotgunTracer.originX, shotgunTracer.originY, hit.x, hit.y);
+    }
+    graphics.fillStyle(0xffe58a, alpha);
+    graphics.fillCircle(shotgunTracer.originX, shotgunTracer.originY, 5);
+  }
 
   const active = matchState.turnOrder[matchState.currentIndex];
 
@@ -314,7 +610,11 @@ export function drawScene(
 
   // Draw a crosshair showing the active worm's current aim direction, or a
   // growing charge bar in its place while a chargeable weapon is charging.
-  if (active && active.worm.alive) {
+  // Skipped for bazooka/shotgun while just aiming (not charging) - their
+  // held-weapon sprite already points along the aim angle, so the crosshair
+  // is redundant clutter; the charge bar still matters and stays.
+  const weaponHasOwnAimIndicator = activeWeaponKey === 'bazooka' || activeWeaponKey === 'shotgun';
+  if (active && active.worm.alive && (charging || !weaponHasOwnAimIndicator)) {
     const worm = active.worm;
     const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
     const innerRadius = 16;
@@ -336,7 +636,8 @@ export function drawScene(
       drawDyingWorm(graphics, worm, DEATH_ANIM_DURATION_MS - (worm.deathTimer ?? 0));
       continue;
     }
-    drawWorm(graphics, worm, Boolean(active && worm === active.worm));
+    const isActive = Boolean(active && worm === active.worm);
+    drawWorm(graphics, worm, isActive, timeMs, isActive ? activeWeaponKey : undefined);
 
     const barWidth = 26;
     const barHeight = 5;
@@ -358,16 +659,33 @@ export function drawScene(
       def.fuseTime != null &&
       projectile.fuseRemaining != null &&
       projectileBlinkOn(projectile.fuseRemaining, def.fuseTime);
-    const fallbackColor = PROJECTILE_COLORS[projectile.weaponKey] ?? 0xff5722;
-    graphics.fillStyle(isBlinkingRed ? 0xff2222 : fallbackColor, 1);
-    if (projectile.weaponKey === 'dynamite') {
+    const fillColor = isBlinkingRed ? 0xff2222 : (PROJECTILE_COLORS[projectile.weaponKey] ?? 0xff5722);
+
+    if (projectile.weaponKey === 'bazooka') {
+      // A rocket-shaped capsule with a nose cone and flame trail, oriented
+      // along its flight direction instead of a plain dot.
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      graphics.save();
+      graphics.translateCanvas(projectile.x, projectile.y);
+      graphics.rotateCanvas(angle);
+      graphics.fillStyle(fillColor, 1);
+      graphics.fillRoundedRect(-6, -3, 10, 6, 2);
+      graphics.fillTriangle(4, -3, 4, 3, 9, 0);
+      graphics.fillStyle(0xffe58a, 0.9);
+      graphics.fillTriangle(-9, -1.6, -6, 0, -9, 1.6);
+      graphics.restore();
+    } else if (projectile.weaponKey === 'dynamite') {
+      graphics.fillStyle(fillColor, 1);
       graphics.fillRoundedRect(projectile.x - 3, projectile.y - 5, 6, 10, 2);
     } else {
-      graphics.fillCircle(projectile.x, projectile.y, 4);
-      graphics.fillStyle(0xffffff, 0.5);
-      graphics.fillCircle(projectile.x - 1.2, projectile.y - 1.2, 1.3);
+      graphics.fillStyle(fillColor, 1);
+      graphics.fillCircle(projectile.x, projectile.y, 4.5);
+      graphics.fillStyle(0xffffff, 0.55);
+      graphics.fillCircle(projectile.x - 1.3, projectile.y - 1.3, 1.4);
     }
   }
+
+  drawExplosions(graphics, explosions);
 }
 
 // A Record (not a positional array) so TypeScript errors if a WeaponKey is

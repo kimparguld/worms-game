@@ -7,7 +7,21 @@ describe('generateSilhouetteMask', () => {
     const mask = generateSilhouetteMask(width, height);
     expect(mask.length).toBe(width * height);
     expect(mask[0 * width + 50]).toBe(0);
-    expect(mask[(height - 1) * width + 50]).toBe(1);
+    // Checked across the whole row, not one fixed column: a lake or building
+    // can legitimately leave any single column non-ground at this depth.
+    let hasGroundAtRow85 = false;
+    for (let x = 0; x < width; x++) {
+      if (mask[85 * width + x] === 1) { hasGroundAtRow85 = true; break; }
+    }
+    expect(hasGroundAtRow85).toBe(true);
+  });
+
+  it('reserves the bottom band for water, regardless of the generated ground height', () => {
+    const width = 100, height = 100;
+    const mask = generateSilhouetteMask(width, height);
+    for (let x = 0; x < width; x++) {
+      expect(mask[(height - 1) * width + x]).toBe(0);
+    }
   });
 });
 

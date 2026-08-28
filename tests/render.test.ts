@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel,
-  fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale, teamHealthBarX,
+  fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale, teamHealthBarX, tracerAlpha,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
@@ -30,6 +30,20 @@ describe('turnBannerAlpha', () => {
 
   it('fades out near the end of the banner', () => {
     expect(turnBannerAlpha(10, 1500)).toBeLessThan(0.1);
+  });
+});
+
+describe('tracerAlpha', () => {
+  it('is fully opaque the instant the tracer is created', () => {
+    expect(tracerAlpha(0.15, 0.15)).toBe(1);
+  });
+
+  it('fades to 0 as the timer runs out', () => {
+    expect(tracerAlpha(0, 0.15)).toBe(0);
+  });
+
+  it('is clamped to 0 once the timer has gone negative', () => {
+    expect(tracerAlpha(-0.05, 0.15)).toBe(0);
   });
 });
 
