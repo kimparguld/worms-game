@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { createMatchRuntime, stepMatch } from '../matchLoop.js';
 import { checkWinner, currentWorm } from '../game.js';
-import { drawTerrain, drawScene, updateHud, drawSky, turnBannerAlpha, turnBannerLabel } from '../render.js';
+import { drawTerrain, drawScene, updateHud, drawSky, turnBannerAlpha, turnBannerLabel, drawTeamHealthBars } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
 import { TURN_BANNER_DURATION_MS } from '../constants.js';
@@ -76,6 +76,7 @@ export class GameScene extends Phaser.Scene {
 
     drawTerrain(this.terrainTexture, this.rt.terrain);
     drawScene(this.graphics, this.allWorms(), this.rt.projectiles, this.rt.match, this.rt.rope, this.rt.charging, this.rt.chargePower);
+    drawTeamHealthBars(this.graphics, this.rt.teams, this.scale.width);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
 
     const bannerAlpha = turnBannerAlpha(this.rt.turnBannerTimer ?? 0, TURN_BANNER_DURATION_MS);

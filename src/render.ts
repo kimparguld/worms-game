@@ -1,6 +1,6 @@
 import type Phaser from 'phaser';
 import { STARTING_HP } from './constants.js';
-import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey } from './types.js';
+import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team } from './types.js';
 
 let cachedImageData: ImageData | null = null;
 let cachedRunLength: Int32Array | null = null;
@@ -258,4 +258,35 @@ export function chargeBarColor(chargePower: number): number {
   const g = Math.round(CHARGE_BAR_START_COLOR.g + (CHARGE_BAR_END_COLOR.g - CHARGE_BAR_START_COLOR.g) * clamped);
   const b = Math.round(CHARGE_BAR_START_COLOR.b + (CHARGE_BAR_END_COLOR.b - CHARGE_BAR_START_COLOR.b) * clamped);
   return (r << 16) | (g << 8) | b;
+}
+
+export function teamHealthFraction(team: Team): number {
+  if (team.worms.length === 0) return 0;
+  const totalHp = team.worms.reduce((sum, w) => sum + w.hp, 0);
+  const maxHp = team.worms.length * STARTING_HP;
+  return totalHp / maxHp;
+}
+
+const TEAM_BAR_WIDTH = 220;
+const TEAM_BAR_HEIGHT = 16;
+const TEAM_BAR_MARGIN = 16;
+
+// One life bar per team across the top of the screen: the first team's bar
+// is left-aligned, the second team's is right-aligned. This project always
+// creates exactly two teams (see matchLoop.ts's createMatchRuntime), so a
+// two-slot left/right layout is sufficient.
+export function drawTeamHealthBars(graphics: Phaser.GameObjects.Graphics, teams: Team[], canvasWidth: number): void {
+  teams.forEach((team, index) => {
+    const x = index === 0 ? TEAM_BAR_MARGIN : canvasWidth - TEAM_BAR_MARGIN - TEAM_BAR_WIDTH;
+    const y = TEAM_BAR_MARGIN;
+    const fraction = teamHealthFraction(team);
+    const color = TEAM_COLORS[team.playerId] ?? 0xdddddd;
+
+    graphics.fillStyle(0x16213f, 0.72);
+    graphics.fillRoundedRect(x - 2, y - 2, TEAM_BAR_WIDTH + 4, TEAM_BAR_HEIGHT + 4, 6);
+    graphics.fillStyle(0x0f172e, 1);
+    graphics.fillRoundedRect(x, y, TEAM_BAR_WIDTH, TEAM_BAR_HEIGHT, 4);
+    graphics.fillStyle(color, 1);
+    graphics.fillRoundedRect(x, y, Math.max(0, TEAM_BAR_WIDTH * fraction), TEAM_BAR_HEIGHT, 4);
+  });
 }

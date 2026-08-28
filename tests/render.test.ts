@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor } from '../src/render.js';
+import { turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction } from '../src/render.js';
+import { createWorm } from '../src/worm.js';
 
 describe('turnBannerLabel', () => {
   it('formats a playerId like "p2" as "Player 2 turn"', () => {
@@ -50,5 +51,23 @@ describe('chargeBarColor', () => {
 
   it('is red at charge power 1', () => {
     expect(chargeBarColor(1)).toBe(0xe85d5d);
+  });
+});
+
+describe('teamHealthFraction', () => {
+  it('is 1 when every worm is at full health', () => {
+    const team = { playerId: 'p1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
+    expect(teamHealthFraction(team)).toBe(1);
+  });
+
+  it('is the sum of remaining hp over the sum of max hp', () => {
+    const team = { playerId: 'p1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
+    team.worms[0].hp = 50; // out of 100
+    team.worms[1].hp = 100;
+    expect(teamHealthFraction(team)).toBe(0.75); // (50 + 100) / (100 + 100)
+  });
+
+  it('is 0 for a team with no worms', () => {
+    expect(teamHealthFraction({ playerId: 'p1', worms: [] })).toBe(0);
   });
 });
