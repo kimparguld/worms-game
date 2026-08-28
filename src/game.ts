@@ -26,7 +26,7 @@ export function advanceTurn(matchState: MatchState): boolean {
   const n = matchState.turnOrder.length;
   for (let i = 1; i <= n; i++) {
     const idx = (matchState.currentIndex + i) % n;
-    if (matchState.turnOrder[idx].worm.alive) {
+    if (matchState.turnOrder[idx].worm.alive && !matchState.turnOrder[idx].worm.dying) {
       matchState.currentIndex = idx;
       matchState.turnTimeRemaining = TURN_DURATION_MS;
       matchState.wind = randomWind();

@@ -39,6 +39,13 @@ describe('advanceTurn', () => {
     advanceTurn(match);
     expect(match.currentIndex).toBe(2);
   });
+
+  it('skips a worm that is still playing its death animation', () => {
+    const match = createMatch(makeTeams());
+    match.turnOrder[1].worm.dying = true;
+    advanceTurn(match);
+    expect(match.currentIndex).toBe(2);
+  });
 });
 
 describe('tickTurnTimer', () => {

@@ -76,4 +76,13 @@ describe('raycastHit', () => {
     const hit = raycastHit(terrain, [shooter], 50, 50, 0, 200, shooter);
     expect(hit.type).toBe('none');
   });
+
+  it('does not hit a worm that is already dying', () => {
+    const terrain = createTerrain(100, 100);
+    terrain.mask.fill(0);
+    const worm = createWorm(50, 20, 'p1', 'A');
+    worm.dying = true;
+    const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);
+    expect(hit.type).toBe('none');
+  });
 });

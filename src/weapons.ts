@@ -66,7 +66,7 @@ export function raycastHit(
   for (let d = 0; d <= maxRange; d += step) {
     const x = originX + dx * d;
     const y = originY + dy * d;
-    const hitWorm = worms.find((w) => w.alive && w !== excludeWorm && Math.hypot(w.x - x, w.y - y) < 10);
+    const hitWorm = worms.find((w) => w.alive && !w.dying && w !== excludeWorm && Math.hypot(w.x - x, w.y - y) < 10);
     if (hitWorm) return { type: 'worm', worm: hitWorm, x, y, distance: d };
     if (isSolid(terrain, x, y)) return { type: 'terrain', x, y, distance: d };
   }
