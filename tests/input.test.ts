@@ -5,9 +5,28 @@ describe('keyToAction', () => {
   it('maps movement and action keys', () => {
     expect(keyToAction('ArrowLeft')).toBe('left');
     expect(keyToAction('ArrowRight')).toBe('right');
-    expect(keyToAction(' ')).toBe('jump');
-    expect(keyToAction('Enter')).toBe('fire');
+    expect(keyToAction(' ')).toBe('fire');
+    expect(keyToAction('Enter')).toBe('jump');
     expect(keyToAction('3')).toBe('weapon3');
+  });
+
+  it('maps WASD as an alternate to the arrow keys', () => {
+    expect(keyToAction('a')).toBe('left');
+    expect(keyToAction('A')).toBe('left');
+    expect(keyToAction('d')).toBe('right');
+    expect(keyToAction('D')).toBe('right');
+    expect(keyToAction('w')).toBe('aimUp');
+    expect(keyToAction('W')).toBe('aimUp');
+    expect(keyToAction('s')).toBe('aimDown');
+    expect(keyToAction('S')).toBe('aimDown');
+  });
+
+  it('maps the 6-9 and 0 keys to the five new weapon slots', () => {
+    expect(keyToAction('6')).toBe('weapon6');
+    expect(keyToAction('7')).toBe('weapon7');
+    expect(keyToAction('8')).toBe('weapon8');
+    expect(keyToAction('9')).toBe('weapon9');
+    expect(keyToAction('0')).toBe('weapon10');
   });
 
   it('returns null for unmapped keys', () => {
