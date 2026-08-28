@@ -29,6 +29,9 @@ export class GameScene extends Phaser.Scene {
   private emberEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private debrisEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private splashEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private muzzleEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private dustEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private activeWormGlow!: Phaser.GameObjects.Image;
 
   // Identity-tracked (not value-tracked): an explosion/splash's `timer`
   // counts down every frame, so the only reliable "have I already fired a
@@ -37,7 +40,12 @@ export class GameScene extends Phaser.Scene {
   // the dead effect and nothing else references it.
   private burstedExplosions = new WeakSet<object>();
   private burstedSplashes = new WeakSet<object>();
+  private burstedProjectiles = new WeakSet<object>();
   private bannerWasVisible = false;
+  // Counts down in triggerMovementDust; only one worm can act per turn, so
+  // a single shared cooldown (rather than one per worm) is enough to keep
+  // footstep puffs from firing every single frame while walking.
+  private dustCooldownMs = 0;
 
   constructor() {
     super('GameScene');
@@ -120,6 +128,27 @@ export class GameScene extends Phaser.Scene {
 
     this.createParticleEmitters();
 
+    // A soft gold halo behind the active-worm ring (drawn separately in
+    // render.ts) - a dedicated Image using its own radially-faded texture,
+    // not the Glow filter on the tiny particleDot sprite: at the scale this
+    // halo is displayed, Glow's fixed pixel-space distance swamped the 8x8
+    // texture and squared off into a visible rectangle instead of a halo.
+    if (!this.textures.exists('glowHalo')) {
+      const size = 64;
+      const halo = this.textures.createCanvas('glowHalo', size, size)!;
+      const gradient = halo.context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      gradient.addColorStop(0, 'rgba(255,255,255,0.9)');
+      gradient.addColorStop(1, 'rgba(255,255,255,0)');
+      halo.context.fillStyle = gradient;
+      halo.context.fillRect(0, 0, size, size);
+      halo.refresh();
+    }
+    this.activeWormGlow = this.add.image(0, 0, 'glowHalo').setTint(0xffd966).setBlendMode(Phaser.BlendModes.ADD);
+
+    // A faint darkened edge to frame the arena, not a heavy vignette - it
+    // should read as depth, not as a filter someone forgot to remove.
+    this.cameras.main.filters.internal.addVignette(0.5, 0.5, 1.0, 0.25);
+
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
     this.events.once('shutdown', () => {
@@ -165,6 +194,23 @@ export class GameScene extends Phaser.Scene {
       tint: [0xdff3fb, 0x8fd8f7],
       emitting: false,
     });
+    this.muzzleEmitter = this.add.particles(0, 0, 'particleDot', {
+      lifespan: 160,
+      speed: { min: 30, max: 120 },
+      scale: { start: 1, end: 0 },
+      tint: [0xfff2b0, 0xffb347],
+      blendMode: Phaser.BlendModes.ADD,
+      emitting: false,
+    });
+    this.dustEmitter = this.add.particles(0, 0, 'particleDot', {
+      lifespan: 320,
+      speed: { min: 8, max: 34 },
+      angle: { min: -160, max: -20 },
+      gravityY: 260,
+      scale: { start: 0.45, end: 0 },
+      tint: [0xc9a876, 0x9c7b4d],
+      emitting: false,
+    });
   }
 
   // Fires the one-shot particle burst + camera shake for any explosion or
@@ -178,11 +224,36 @@ export class GameScene extends Phaser.Scene {
       this.debrisEmitter.explode(10, ex.x, ex.y);
       const intensity = Phaser.Math.Clamp(ex.radius / 900, 0.002, 0.012);
       this.cameras.main.shake(180, intensity);
+      // Warm, brief screen flash so a big dynamite blast reads as a flash of
+      // light, not just shake - scaled down enough that a bazooka barely shows.
+      const flashStrength = Phaser.Math.Clamp(ex.radius / 90, 0.08, 0.6);
+      this.cameras.main.flash(120, 255, 200, 140);
+      this.cameras.main.flashEffect.alpha = flashStrength;
     }
     for (const sp of this.rt.splashes) {
       if (this.burstedSplashes.has(sp)) continue;
       this.burstedSplashes.add(sp);
       this.splashEmitter.explode(14, sp.x, sp.y);
+    }
+    for (const p of this.rt.projectiles) {
+      if (this.burstedProjectiles.has(p)) continue;
+      this.burstedProjectiles.add(p);
+      this.muzzleEmitter.explode(8, p.x, p.y);
+    }
+  }
+
+  // A couple of dirt puffs behind the active worm's feet while it's
+  // actually crawling on the ground - skipped for jumps/falls/rope swings,
+  // where feet aren't in contact with the terrain to kick anything up.
+  private triggerMovementDust(deltaMs: number): void {
+    this.dustCooldownMs -= deltaMs;
+    if (this.dustCooldownMs > 0) return;
+    for (const worm of this.allWorms()) {
+      if (!worm.alive || worm.dying || !worm.onGround) continue;
+      if (Math.abs(worm.vx) < 15) continue;
+      this.dustEmitter.explode(2, worm.x - worm.facing * 8, worm.y + 12);
+      this.dustCooldownMs = 90;
+      break;
     }
   }
 
@@ -210,6 +281,8 @@ export class GameScene extends Phaser.Scene {
     drawTeamHealthBars(this.graphics, this.rt.teams, this.scale.width);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
     this.triggerEffectBursts();
+    this.triggerMovementDust(delta);
+    this.updateActiveWormGlow(time);
 
     const bannerAlpha = turnBannerAlpha(this.rt.turnBannerTimer ?? 0, TURN_BANNER_DURATION_MS);
     this.turnBannerText.setAlpha(bannerAlpha);
@@ -224,6 +297,23 @@ export class GameScene extends Phaser.Scene {
 
     const result = checkWinner(this.rt.teams);
     if (result) this.scene.start('EndScene', { winner: result });
+  }
+
+  // Slow pulse (not a static glow) so the turn indicator keeps drawing the
+  // eye without competing with brighter one-shot effects like explosions.
+  // Hidden while the active worm is dead/dying - there's no "your turn" to
+  // highlight once it can no longer act.
+  private updateActiveWormGlow(timeMs: number): void {
+    const active = currentWorm(this.rt.match);
+    if (!active.worm.alive || active.worm.dying) {
+      this.activeWormGlow.setVisible(false);
+      return;
+    }
+    this.activeWormGlow.setVisible(true);
+    this.activeWormGlow.setPosition(active.worm.x, active.worm.y - 1);
+    const pulse = 0.75 + Math.sin(timeMs / 260) * 0.25;
+    this.activeWormGlow.setScale(0.45 + pulse * 0.1);
+    this.activeWormGlow.setAlpha(0.35 + pulse * 0.25);
   }
 
   private allWorms(): Worm[] {

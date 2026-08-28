@@ -56,5 +56,35 @@ export class EndScene extends Phaser.Scene {
         this.scene.start('StartScene');
       });
     });
+
+    if (this.winner !== 'draw') this.playConfetti();
+  }
+
+  // A shower of team-colored confetti falling from the top of the screen -
+  // a draw gets none, since there's no team to celebrate.
+  private playConfetti(): void {
+    if (!this.textures.exists('particleDot')) {
+      const dot = this.make.graphics({ x: 0, y: 0 });
+      dot.fillStyle(0xffffff, 1);
+      dot.fillCircle(4, 4, 4);
+      dot.generateTexture('particleDot', 8, 8);
+      dot.destroy();
+    }
+    const teamTints: Record<string, number[]> = {
+      p1: [0x14d6b8, 0xffffff, 0x0c8f7c],
+      p2: [0xff3860, 0xffffff, 0xc22346],
+    };
+    const confetti = this.add.particles(0, 0, 'particleDot', {
+      x: { min: 0, max: this.scale.width },
+      y: -10,
+      lifespan: 2600,
+      speedY: { min: 80, max: 160 },
+      speedX: { min: -40, max: 40 },
+      rotate: { min: 0, max: 360 },
+      scale: { start: 1.1, end: 0.6 },
+      tint: teamTints[this.winner] ?? [0xffd966, 0xffffff],
+      frequency: 40,
+    });
+    this.time.delayedCall(2200, () => confetti.stop());
   }
 }

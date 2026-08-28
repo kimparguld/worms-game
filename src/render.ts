@@ -350,13 +350,9 @@ function drawWorm(
   graphics.fillStyle(0x000000, 0.2);
   graphics.fillEllipse(worm.x - facing * 6, worm.y + 13, 38, 7);
 
-  // Ring around the active worm - team color already carries the
-  // team distinction, so the "it's your turn" marker uses a different
-  // (gold) color to stay legible against either team's headband.
-  if (isActive) {
-    graphics.lineStyle(3, 0xffd966, 1);
-    graphics.strokeCircle(head.x, head.y - 1, 17);
-  }
+  // The active worm's "it's your turn" marker is the pulsing gold glow
+  // halo (GameScene's activeWormGlow, a separate GameObject) - a flat
+  // stroked ring here would just double up on it.
 
   // Tapering tail segments, drawn back-to-front so each overlaps cleanly
   // under the segment ahead of it - no legs, worms crawl.
