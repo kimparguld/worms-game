@@ -1,5 +1,6 @@
 import type Phaser from 'phaser';
 import { STARTING_HP } from './constants.js';
+import { WEAPON_KEYS } from './matchLoop.js';
 import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team } from './types.js';
 
 let cachedImageData: ImageData | null = null;
@@ -283,11 +284,19 @@ export function drawScene(
   }
 }
 
-// Indexed by the 1-5 weapon-select keys, matching WEAPON_KEYS in matchLoop.ts.
-const WEAPON_LABELS = ['Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite'];
+// A Record (not a positional array) so TypeScript errors if a WeaponKey is
+// ever added to WEAPON_KEYS in matchLoop.ts without a matching label here.
+const WEAPON_LABELS: Record<WeaponKey, string> = {
+  bazooka: 'Bazooka',
+  grenade: 'Grenade',
+  shotgun: 'Shotgun',
+  ninjaRope: 'Ninja Rope',
+  dynamite: 'Dynamite',
+};
 
 export function weaponLabel(selectedWeapon: number): string {
-  return WEAPON_LABELS[selectedWeapon - 1] ?? WEAPON_LABELS[0];
+  const key = WEAPON_KEYS[selectedWeapon - 1] ?? WEAPON_KEYS[0];
+  return WEAPON_LABELS[key];
 }
 
 export function updateHud(
