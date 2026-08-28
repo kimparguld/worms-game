@@ -47,6 +47,19 @@ export function updateProjectile(
   projectile.vx = vel.x;
   projectile.vy = vel.y;
 
+  // A shot that flies off the side or bottom of the map would otherwise
+  // never trigger hitTerrain (isSolid is false out of bounds) and would
+  // stall the turn until the 45s turn timer rescues it. No ceiling on -y:
+  // a lobbed shot must be allowed to arc above the screen and come back.
+  const OUT_OF_BOUNDS_MARGIN = 200;
+  if (
+    projectile.x < -OUT_OF_BOUNDS_MARGIN || projectile.x > terrain.width + OUT_OF_BOUNDS_MARGIN ||
+    projectile.y > terrain.height + OUT_OF_BOUNDS_MARGIN
+  ) {
+    projectile.alive = false;
+    return { exploded: false };
+  }
+
   const fuseExpired = isFuseBased && projectile.fuseRemaining != null && projectile.fuseRemaining <= 0;
   const hitTerrain = isSolid(terrain, projectile.x, projectile.y);
 

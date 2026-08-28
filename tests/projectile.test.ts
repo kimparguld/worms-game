@@ -48,6 +48,19 @@ describe('updateProjectile', () => {
     expect(result!.exploded).toBe(true);
   });
 
+  it('kills a bazooka that flies off the edge of the map without ever hitting terrain', () => {
+    const terrain = flatTerrain(200, 200, 100);
+    // Fired flat and fast to the left from near the left edge - it exits
+    // x < 0 well before gravity could bring it down onto the ground.
+    const projectile = createProjectile('bazooka', 10, 50, Math.PI, 1);
+    let result: ProjectileUpdateResult | undefined;
+    for (let i = 0; i < 200 && !(result && result.exploded === false && !projectile.alive); i++) {
+      result = updateProjectile(projectile, terrain, [], 0, 1 / 60);
+    }
+    expect(result!.exploded).toBe(false);
+    expect(projectile.alive).toBe(false);
+  });
+
   it('rests dynamite in place until it detonates', () => {
     const terrain = flatTerrain(200, 200, 100);
     const projectile = createProjectile('dynamite', 60, 99, 0, 0);
