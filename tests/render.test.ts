@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel } from '../src/render.js';
+import {
+  turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel,
+  fuseBlinkFrequency, projectileBlinkOn,
+} from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
 describe('turnBannerLabel', () => {
@@ -81,5 +84,44 @@ describe('teamHealthFraction', () => {
 
   it('is 0 for a team with no worms', () => {
     expect(teamHealthFraction({ playerId: 'p1', worms: [] })).toBe(0);
+  });
+});
+
+describe('fuseBlinkFrequency', () => {
+  it('starts at the slow blink rate when the fuse just began', () => {
+    expect(fuseBlinkFrequency(3, 3)).toBeCloseTo(1.5, 5);
+  });
+
+  it('reaches the fast blink rate right before detonation', () => {
+    expect(fuseBlinkFrequency(0, 3)).toBeCloseTo(9, 5);
+  });
+
+  it('increases monotonically as the fuse burns down', () => {
+    expect(fuseBlinkFrequency(1, 3)).toBeGreaterThan(fuseBlinkFrequency(2, 3));
+  });
+});
+
+describe('projectileBlinkOn', () => {
+  it('toggles more times in the final second than the first second of a long fuse', () => {
+    const fuseTime = 5;
+    const dt = 0.01;
+
+    let earlyToggles = 0;
+    let prev = projectileBlinkOn(fuseTime, fuseTime);
+    for (let t = dt; t <= 1; t += dt) {
+      const on = projectileBlinkOn(fuseTime - t, fuseTime);
+      if (on !== prev) earlyToggles++;
+      prev = on;
+    }
+
+    let lateToggles = 0;
+    prev = projectileBlinkOn(1, fuseTime);
+    for (let t = 4; t <= 5; t += dt) {
+      const on = projectileBlinkOn(fuseTime - t, fuseTime);
+      if (on !== prev) lateToggles++;
+      prev = on;
+    }
+
+    expect(lateToggles).toBeGreaterThan(earlyToggles);
   });
 });

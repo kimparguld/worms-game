@@ -1,6 +1,7 @@
 import type Phaser from 'phaser';
 import { STARTING_HP } from './constants.js';
 import { WEAPON_KEYS } from './matchLoop.js';
+import { WEAPONS } from './weapons.js';
 import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team } from './types.js';
 
 let cachedImageData: ImageData | null = null;
@@ -214,6 +215,27 @@ const PROJECTILE_COLORS: Record<WeaponKey, number> = {
   dynamite: 0xd7263d,
 };
 
+const FUSE_BLINK_START_HZ = 1.5;
+const FUSE_BLINK_END_HZ = 9;
+
+export function fuseBlinkFrequency(fuseRemaining: number, fuseTime: number): number {
+  if (fuseTime <= 0) return FUSE_BLINK_END_HZ;
+  const elapsedFraction = Math.max(0, Math.min(1, 1 - fuseRemaining / fuseTime));
+  return FUSE_BLINK_START_HZ + (FUSE_BLINK_END_HZ - FUSE_BLINK_START_HZ) * elapsedFraction;
+}
+
+export function projectileBlinkOn(fuseRemaining: number, fuseTime: number): boolean {
+  if (fuseTime <= 0) return false;
+  const elapsed = Math.max(0, fuseTime - fuseRemaining);
+  // Phase is the integral of a frequency that ramps linearly from
+  // FUSE_BLINK_START_HZ to FUSE_BLINK_END_HZ over fuseTime, so the blink
+  // visibly speeds up (a "chirp") as the fuse burns down, instead of
+  // blinking at a constant rate the whole time.
+  const freqSlope = (FUSE_BLINK_END_HZ - FUSE_BLINK_START_HZ) / fuseTime;
+  const phase = FUSE_BLINK_START_HZ * elapsed + 0.5 * freqSlope * elapsed * elapsed;
+  return Math.sin(phase * Math.PI * 2) >= 0;
+}
+
 export function drawScene(
   graphics: Phaser.GameObjects.Graphics,
   worms: Worm[],
@@ -273,7 +295,13 @@ export function drawScene(
 
   for (const projectile of projectiles) {
     if (!projectile.alive) continue;
-    graphics.fillStyle(PROJECTILE_COLORS[projectile.weaponKey] ?? 0xff5722, 1);
+    const def = WEAPONS[projectile.weaponKey];
+    const isBlinkingRed =
+      def.fuseTime != null &&
+      projectile.fuseRemaining != null &&
+      projectileBlinkOn(projectile.fuseRemaining, def.fuseTime);
+    const fallbackColor = PROJECTILE_COLORS[projectile.weaponKey] ?? 0xff5722;
+    graphics.fillStyle(isBlinkingRed ? 0xff2222 : fallbackColor, 1);
     if (projectile.weaponKey === 'dynamite') {
       graphics.fillRoundedRect(projectile.x - 3, projectile.y - 5, 6, 10, 2);
     } else {
