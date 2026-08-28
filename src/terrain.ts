@@ -40,22 +40,67 @@ const SPAWN_EXCLUSION_FRACTIONS = [0.156, 0.208, 0.792, 0.844];
 // ~38px at 960 width - wide enough to keep a cliff/building's edge, not just
 // its center, clear of the spawn column.
 const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
-const SPAWN_EXCLUSION_MAX_ATTEMPTS = 10;
 
-// True if the fraction-space span [minFraction, maxFraction], widened by the
-// spawn margin on both sides, would overlap any known spawn column.
-function spanNearSpawnColumn(minFraction: number, maxFraction: number): boolean {
-  return SPAWN_EXCLUSION_FRACTIONS.some(
-    (spawnFraction) =>
-      spawnFraction >= minFraction - SPAWN_EXCLUSION_MARGIN_FRACTION &&
-      spawnFraction <= maxFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
-  );
-}
+// Deterministically samples a fraction from [rangeMin, rangeMax] that is
+// guaranteed not to place an item of the given half-width anywhere near a
+// spawn column - no reroll, no retry budget, no chance of failure.
+//
+// For each spawn column, the forbidden zone is the set of center fractions
+// at which an item of this half-width would come within
+// SPAWN_EXCLUSION_MARGIN_FRACTION of that column:
+// [spawn - halfWidthFraction - margin, spawn + halfWidthFraction + margin].
+// These per-column zones are clipped to the requested range, merged (they
+// can and do overlap for this project's actual spawn fractions - e.g. 0.156
+// and 0.208 are close enough that their zones merge into one), and then the
+// complement (the allowed sub-intervals) is sampled uniformly by weighting
+// each sub-interval by its length, so the result is uniform over the whole
+// allowed region rather than biased toward whichever interval is checked
+// first.
+function sampleExcludingSpawnColumns(rangeMin: number, rangeMax: number, halfWidthFraction: number): number {
+  const forbidden: Array<[number, number]> = [];
+  for (const spawnFraction of SPAWN_EXCLUSION_FRACTIONS) {
+    const lo = Math.max(rangeMin, spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION);
+    const hi = Math.min(rangeMax, spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION);
+    if (lo < hi) forbidden.push([lo, hi]);
+  }
+  forbidden.sort((a, b) => a[0] - b[0]);
 
-// True if a span centered at `fraction` with the given half-width (plus the
-// spawn margin on both sides) would overlap any known spawn column.
-function isNearSpawnColumn(fraction: number, halfWidthFraction: number): boolean {
-  return spanNearSpawnColumn(fraction - halfWidthFraction, fraction + halfWidthFraction);
+  // Sweep-merge overlapping/adjacent forbidden intervals.
+  const merged: Array<[number, number]> = [];
+  for (const [lo, hi] of forbidden) {
+    const last = merged[merged.length - 1];
+    if (last && lo <= last[1]) {
+      last[1] = Math.max(last[1], hi);
+    } else {
+      merged.push([lo, hi]);
+    }
+  }
+
+  // Allowed sub-intervals are the complement of the merged forbidden
+  // intervals within [rangeMin, rangeMax].
+  const allowed: Array<[number, number]> = [];
+  let cursor = rangeMin;
+  for (const [lo, hi] of merged) {
+    if (lo > cursor) allowed.push([cursor, lo]);
+    cursor = Math.max(cursor, hi);
+  }
+  if (cursor < rangeMax) allowed.push([cursor, rangeMax]);
+
+  const totalLength = allowed.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
+  // Defensive fallback: should never happen with this project's actual
+  // constants (verified: every cliff/building range keeps a wide allowed
+  // margin), but if the allowed region is ever empty, return a well-defined
+  // midpoint rather than throwing or looping.
+  if (totalLength <= 0) return (rangeMin + rangeMax) / 2;
+
+  let offset = Math.random() * totalLength;
+  for (const [lo, hi] of allowed) {
+    const len = hi - lo;
+    if (offset < len) return lo + offset;
+    offset -= len;
+  }
+  // Floating-point edge case: offset landed exactly on the total length.
+  return allowed[allowed.length - 1][1];
 }
 
 const BUILDING_COUNT_MIN = 2;
@@ -115,18 +160,11 @@ function applyCliff(heights: Float64Array, width: number, height: number, center
   for (let x = minX; x <= maxX; x++) heights[x] = raisedHeight;
 }
 
-// Re-rolls a cliff's centerFraction (bounded retries) until its footprint -
-// including the spawn margin - clears every known spawn column, falling back
-// to the last roll if it never clears within the attempt budget (rather than
-// looping forever).
+// Deterministically samples a cliff's centerFraction from [min, max] such
+// that its footprint (including the spawn margin) never overlaps a known
+// spawn column - see sampleExcludingSpawnColumns.
 function pickCliffCenterFraction(min: number, max: number): number {
-  const halfWidthFraction = CLIFF_WIDTH_FRACTION / 2;
-  let fraction = randomBetween(min, max);
-  for (let attempt = 0; attempt < SPAWN_EXCLUSION_MAX_ATTEMPTS; attempt++) {
-    if (!isNearSpawnColumn(fraction, halfWidthFraction)) return fraction;
-    fraction = randomBetween(min, max);
-  }
-  return fraction;
+  return sampleExcludingSpawnColumns(min, max, CLIFF_WIDTH_FRACTION / 2);
 }
 
 function applyCliffs(heights: Float64Array, width: number, height: number): void {
@@ -142,19 +180,20 @@ function computeGroundHeights(width: number, height: number): Float64Array {
   return heights;
 }
 
-// Re-rolls a building's startX (bounded retries) until its footprint -
-// including the spawn margin - clears every known spawn column, falling back
-// to the last roll if it never clears within the attempt budget.
+// Deterministically samples a building's startX such that its footprint
+// (including the spawn margin) never overlaps a known spawn column. Reframed
+// as picking the building's *center* fraction (reusing the same
+// sampleExcludingSpawnColumns helper cliffs use) over the valid center range
+// [halfWidthFraction, 1 - halfWidthFraction], then converted back to a pixel
+// startX and clamped to the valid [0, width - buildingWidth] start range.
 function pickBuildingStartX(width: number, buildingWidth: number): number {
   const maxStart = Math.max(0, width - buildingWidth);
-  let startX = Math.round(randomBetween(0, maxStart));
-  for (let attempt = 0; attempt < SPAWN_EXCLUSION_MAX_ATTEMPTS; attempt++) {
-    const minFraction = Math.max(0, startX) / width;
-    const maxFraction = Math.min(width - 1, startX + buildingWidth) / width;
-    if (!spanNearSpawnColumn(minFraction, maxFraction)) return startX;
-    startX = Math.round(randomBetween(0, maxStart));
-  }
-  return startX;
+  const halfWidthFraction = buildingWidth / width / 2;
+  const rangeMin = halfWidthFraction;
+  const rangeMax = Math.max(rangeMin, 1 - halfWidthFraction);
+  const centerFraction = sampleExcludingSpawnColumns(rangeMin, rangeMax, halfWidthFraction);
+  const startX = Math.round(centerFraction * width - buildingWidth / 2);
+  return Math.min(Math.max(0, startX), maxStart);
 }
 
 // Adds flat-roofed building plateaus on top of the mountain silhouette,
