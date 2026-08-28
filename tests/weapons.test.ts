@@ -12,12 +12,14 @@ describe('WEAPONS', () => {
 });
 
 describe('WEAPONS range', () => {
-  it('gives the bazooka enough max speed to cross most of the map at full charge', () => {
-    expect(WEAPONS.bazooka.maxSpeed).toBe(850);
+  it('gives the bazooka enough max speed to cross the bigger map at full charge', () => {
+    expect(WEAPONS.bazooka.minSpeed).toBe(250);
+    expect(WEAPONS.bazooka.maxSpeed).toBe(1100);
   });
 
-  it('gives the grenade enough max speed to reach well past a short lob', () => {
-    expect(WEAPONS.grenade.maxSpeed).toBe(600);
+  it('gives the grenade enough max speed and fuse time to travel and bounce further', () => {
+    expect(WEAPONS.grenade.maxSpeed).toBe(800);
+    expect(WEAPONS.grenade.fuseTime).toBe(4.5);
   });
 });
 

@@ -4,13 +4,13 @@ import type { Terrain, WeaponDef, WeaponKey, Worm, RaycastHit, ProjectileIntegra
 export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   bazooka: {
     key: 'bazooka', maxDamage: 60, blastRadius: 40, craterRadius: 40,
-    chargeable: true, minSpeed: 200, maxSpeed: 850,
+    chargeable: true, minSpeed: 250, maxSpeed: 1100,
     gravity: true, windAffected: true, fuseTime: null, hitscan: false, pellets: 0, bounces: false,
   },
   grenade: {
     key: 'grenade', maxDamage: 50, blastRadius: 45, craterRadius: 45,
-    chargeable: true, minSpeed: 150, maxSpeed: 600,
-    gravity: true, windAffected: true, fuseTime: 3, hitscan: false, pellets: 0, bounces: true,
+    chargeable: true, minSpeed: 150, maxSpeed: 800,
+    gravity: true, windAffected: true, fuseTime: 4.5, hitscan: false, pellets: 0, bounces: true,
   },
   shotgun: {
     key: 'shotgun', maxDamage: 25, blastRadius: 0, craterRadius: 0,
