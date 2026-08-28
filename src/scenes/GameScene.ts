@@ -38,13 +38,20 @@ export class GameScene extends Phaser.Scene {
 
     this.graphics = this.add.graphics();
 
+    // The HUD panel sits top-centre, in the gap between the two team life
+    // bars (which are anchored to the left and right edges by
+    // drawTeamHealthBars). Top-left would sit directly on top of the first
+    // team's bar and hide it.
+    const hudPanelWidth = 220;
+    const hudPanelHeight = 74;
+    const hudPanelX = Math.round(width / 2 - hudPanelWidth / 2);
     const hudPanel = this.add.graphics();
     hudPanel.fillStyle(0x16213f, 0.72);
-    hudPanel.fillRoundedRect(6, 6, 150, 74, 10);
+    hudPanel.fillRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
     hudPanel.lineStyle(2, 0xffffff, 0.15);
-    hudPanel.strokeRoundedRect(6, 6, 150, 74, 10);
+    hudPanel.strokeRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
 
-    this.hudText = this.add.text(18, 16, '', {
+    this.hudText = this.add.text(hudPanelX + 14, 16, '', {
       fontFamily: "'Baloo 2', sans-serif",
       fontSize: '17px',
       color: '#fff8e7',

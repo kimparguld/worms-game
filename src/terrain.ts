@@ -2,9 +2,23 @@ import type { Terrain } from './types.js';
 
 // Mountain silhouette: a base flat line plus a few random sine "octaves"
 // summed together, so each match gets a differently-shaped mountain range
-// instead of one fixed hill. Amplitudes are kept small enough that ground
-// height always stays well within [0, height] - the cliff/building rise
-// math below depends on that bound to guarantee a real jump/rise.
+// instead of one fixed hill.
+//
+// The height budget below is deliberately conservative so that nothing the
+// generator builds ever reaches the top of the screen: a cliff or building
+// that runs off the top edge looks broken, and a worm spawned on top of one
+// ends up behind the HUD (or clipped away entirely). The budget is:
+//
+//   natural ground  <= BASE + sum(max amplitudes) = 0.37 + 0.15 = 0.52
+//   ground (cliffs) <= MAX_GROUND_HEIGHT_FRACTION            = 0.72
+//   building roofs  <= MAX_BUILDING_ROOF_FRACTION            = 0.80
+//
+// which leaves the top 20% of the screen clear for the HUD and life bars.
+// The cliff rise range is also chosen so that clamping to the ground cap can
+// never eat the whole rise: the worst case is a cliff sitting on the highest
+// possible natural ground (0.52), which still leaves 0.20 of headroom - at
+// or above CLIFF_RISE_MIN_FRACTION, so the ninja rope always gets a wall.
+const MOUNTAIN_BASE_FRACTION = 0.37;
 const MOUNTAIN_OCTAVES = [
   { minAmplitudeFraction: 0.05, maxAmplitudeFraction: 0.09, minFrequency: 1, maxFrequency: 2 },
   { minAmplitudeFraction: 0.02, maxAmplitudeFraction: 0.04, minFrequency: 2, maxFrequency: 4 },
@@ -12,16 +26,21 @@ const MOUNTAIN_OCTAVES = [
 ];
 
 const CLIFF_WIDTH_FRACTION = 0.04;
-const CLIFF_RISE_MIN_FRACTION = 0.25;
-const CLIFF_RISE_MAX_FRACTION = 0.35;
-const MAX_GROUND_HEIGHT_FRACTION = 0.95;
+const CLIFF_RISE_MIN_FRACTION = 0.2;
+const CLIFF_RISE_MAX_FRACTION = 0.3;
+const MAX_GROUND_HEIGHT_FRACTION = 0.72;
 
 const BUILDING_COUNT_MIN = 2;
 const BUILDING_COUNT_MAX = 3;
-const BUILDING_WIDTH_MIN_FRACTION = 0.05;
-const BUILDING_WIDTH_MAX_FRACTION = 0.09;
-const BUILDING_RISE_MIN_FRACTION = 0.28;
-const BUILDING_RISE_MAX_FRACTION = 0.45;
+const BUILDING_WIDTH_MIN_FRACTION = 0.06;
+const BUILDING_WIDTH_MAX_FRACTION = 0.11;
+const BUILDING_RISE_MIN_FRACTION = 0.14;
+const BUILDING_RISE_MAX_FRACTION = 0.26;
+// Even when a building lands on top of an already-capped cliff, it still gets
+// this much height of its own, so a building is always visible as building
+// material rather than collapsing to a zero-height sliver.
+const BUILDING_MIN_HEIGHT_FRACTION = 0.08;
+const MAX_BUILDING_ROOF_FRACTION = 0.8;
 
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
@@ -43,7 +62,7 @@ function computeMountainHeights(width: number, height: number): Float64Array {
     for (const oct of octaves) {
       offset += Math.sin((x / width) * Math.PI * 2 * oct.frequency + oct.phase) * oct.amplitude;
     }
-    heights[x] = height * 0.5 + offset;
+    heights[x] = height * MOUNTAIN_BASE_FRACTION + offset;
   }
   return heights;
 }
@@ -87,6 +106,10 @@ function computeGroundHeights(width: number, height: number): Float64Array {
 // plain ground (mask value 1).
 function applyBuildings(heights: Float64Array, width: number, height: number): Set<number> {
   const buildingColumns = new Set<number>();
+  // Each building's roof is measured from the natural ground, not from
+  // whatever an earlier building already raised these columns to - otherwise
+  // two overlapping buildings stack their rises and blow the height budget.
+  const groundHeights = heights.slice();
   const count = randomInt(BUILDING_COUNT_MIN, BUILDING_COUNT_MAX);
   for (let i = 0; i < count; i++) {
     const buildingWidth = Math.max(
@@ -98,9 +121,12 @@ function applyBuildings(heights: Float64Array, width: number, height: number): S
     const maxX = Math.min(width - 1, startX + buildingWidth);
 
     let naturalMax = 0;
-    for (let x = minX; x <= maxX; x++) naturalMax = Math.max(naturalMax, heights[x]);
+    for (let x = minX; x <= maxX; x++) naturalMax = Math.max(naturalMax, groundHeights[x]);
     const riseFraction = randomBetween(BUILDING_RISE_MIN_FRACTION, BUILDING_RISE_MAX_FRACTION);
-    const roofHeight = Math.min(height * MAX_GROUND_HEIGHT_FRACTION, naturalMax + height * riseFraction);
+    const roofHeight = Math.max(
+      naturalMax + height * BUILDING_MIN_HEIGHT_FRACTION,
+      Math.min(height * MAX_BUILDING_ROOF_FRACTION, naturalMax + height * riseFraction),
+    );
 
     for (let x = minX; x <= maxX; x++) {
       heights[x] = roofHeight;

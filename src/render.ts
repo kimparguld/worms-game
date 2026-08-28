@@ -12,6 +12,29 @@ const GRASS_DEPTH = 5;
 const DIRT_TRANSITION_DEPTH = 45;
 const BUILDING_ROOF_DEPTH = 6;
 
+// Building facade: a flat slab of one colour reads as a brown monolith, so the
+// wall is broken up into a grid of floors and windows. The grid is anchored to
+// the left edge of the building's run on the current row (so windows never get
+// sliced in half at the left edge) and to the depth below the roof.
+const BUILDING_WINDOW_PITCH_X = 20;
+const BUILDING_WINDOW_PITCH_Y = 26;
+const BUILDING_WINDOW_INSET_X = 5;
+const BUILDING_WINDOW_WIDTH = 10;
+const BUILDING_WINDOW_INSET_Y = 7;
+const BUILDING_WINDOW_HEIGHT = 13;
+// Plain wall within this many px of where the facade meets the ground, so a
+// building on a slope gets a solid base instead of a ragged row of windows
+// sliced off by the terrain line.
+const BUILDING_BASE_DEPTH = 16;
+
+// Deterministic per-window hash: the same window is lit every frame (a window
+// that flickers with the render loop would look like a bug, not like a city).
+function windowIsLit(cellX: number, cellY: number, seed: number): boolean {
+  let h = (cellX * 73856093) ^ (cellY * 19349663) ^ (seed * 83492791);
+  h = (h ^ (h >>> 13)) >>> 0;
+  return h % 3 !== 0;
+}
+
 export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Terrain): void {
   const { width, height } = terrain;
   if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
@@ -27,6 +50,11 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
   runLength.fill(0);
   buildingRunLength.fill(0);
 
+  // Left edge (in the current row) of the building run being drawn - the
+  // window grid is anchored to it. Row-major iteration walks x from 0 to
+  // width-1 within each row, so tracking it inline costs nothing.
+  let rowRunStartX = 0;
+
   for (let i = 0; i < terrain.mask.length; i++) {
     const x = i % width;
     const o = i * 4;
@@ -34,15 +62,53 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
     if (cell === 2) {
       runLength[x] = 0;
       buildingRunLength[x]++;
-      if (buildingRunLength[x] <= BUILDING_ROOF_DEPTH) {
-        imageData.data[o] = 90;
-        imageData.data[o + 1] = 94;
-        imageData.data[o + 2] = 102;
+      if (x === 0 || terrain.mask[i - 1] !== 2) rowRunStartX = x;
+
+      const depth = buildingRunLength[x] - 1;
+      const dx = x - rowRunStartX;
+      const atLeftEdge = dx < 2;
+      const atRightEdge = x + 2 >= width || terrain.mask[i + 1] !== 2 || terrain.mask[i + 2] !== 2;
+
+      let r: number;
+      let g: number;
+      let b: number;
+      if (depth < 2) {
+        // Dark lip along the very top of the roof, for a bit of depth.
+        r = 66; g = 70; b = 78;
+      } else if (depth < BUILDING_ROOF_DEPTH) {
+        r = 90; g = 94; b = 102;
+      } else if (atLeftEdge || atRightEdge) {
+        // Shaded corners so the facade reads as a solid volume.
+        r = 142; g = 96; b = 66;
       } else {
-        imageData.data[o] = 178;
-        imageData.data[o + 1] = 124;
-        imageData.data[o + 2] = 88;
+        const wy = depth - BUILDING_ROOF_DEPTH;
+        const cellX = dx % BUILDING_WINDOW_PITCH_X;
+        const cellY = wy % BUILDING_WINDOW_PITCH_Y;
+        const baseProbe = i + BUILDING_BASE_DEPTH * width;
+        const nearBase = baseProbe >= terrain.mask.length || terrain.mask[baseProbe] !== 2;
+        const inWindow =
+          !nearBase &&
+          cellX >= BUILDING_WINDOW_INSET_X &&
+          cellX < BUILDING_WINDOW_INSET_X + BUILDING_WINDOW_WIDTH &&
+          cellY >= BUILDING_WINDOW_INSET_Y &&
+          cellY < BUILDING_WINDOW_INSET_Y + BUILDING_WINDOW_HEIGHT;
+        if (inWindow) {
+          const lit = windowIsLit(
+            Math.floor(dx / BUILDING_WINDOW_PITCH_X),
+            Math.floor(wy / BUILDING_WINDOW_PITCH_Y),
+            rowRunStartX,
+          );
+          if (lit) { r = 250; g = 214; b = 137; } else { r = 92; g = 84; b = 100; }
+        } else if (cellY < 2) {
+          // Thin floor divider between window rows.
+          r = 158; g = 108; b = 76;
+        } else {
+          r = 178; g = 124; b = 88;
+        }
       }
+      imageData.data[o] = r;
+      imageData.data[o + 1] = g;
+      imageData.data[o + 2] = b;
       imageData.data[o + 3] = 255;
     } else if (cell === 1) {
       buildingRunLength[x] = 0;
@@ -217,6 +283,13 @@ export function drawScene(
   }
 }
 
+// Indexed by the 1-5 weapon-select keys, matching WEAPON_KEYS in matchLoop.ts.
+const WEAPON_LABELS = ['Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite'];
+
+export function weaponLabel(selectedWeapon: number): string {
+  return WEAPON_LABELS[selectedWeapon - 1] ?? WEAPON_LABELS[0];
+}
+
 export function updateHud(
   hudText: Phaser.GameObjects.Text,
   matchState: MatchState,
@@ -225,7 +298,7 @@ export function updateHud(
   hudText.setText(
     `Wind: ${matchState.wind.toFixed(1)}\n` +
       `Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s\n` +
-      `Weapon: ${selectedWeapon}`,
+      `Weapon: ${selectedWeapon} - ${weaponLabel(selectedWeapon)}`,
   );
 }
 

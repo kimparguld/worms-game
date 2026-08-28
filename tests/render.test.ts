@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction } from '../src/render.js';
+import { turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
 describe('turnBannerLabel', () => {
@@ -51,6 +51,18 @@ describe('chargeBarColor', () => {
 
   it('is red at charge power 1', () => {
     expect(chargeBarColor(1)).toBe(0xe85d5d);
+  });
+});
+
+describe('weaponLabel', () => {
+  it('names each of the five selectable weapons', () => {
+    expect([1, 2, 3, 4, 5].map(weaponLabel)).toEqual([
+      'Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite',
+    ]);
+  });
+
+  it('falls back to the default weapon for an out-of-range selection', () => {
+    expect(weaponLabel(9)).toBe('Bazooka');
   });
 });
 
