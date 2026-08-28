@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createMatchRuntime, stepMatch } from '../src/matchLoop.js';
+import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../src/matchLoop.js';
 import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
@@ -573,5 +573,53 @@ describe('stepMatch water', () => {
     stepMatch(rt, input, 0.02);
 
     expect(rt.splashes).toHaveLength(0);
+  });
+});
+
+describe('WEAPON_KEYS', () => {
+  it('lists all ten weapons, with the five new ones appended after the original five', () => {
+    expect(WEAPON_KEYS).toEqual([
+      'bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite',
+      'sniperRifle', 'airstrikeRocket', 'holyHandGrenade', 'mine', 'grapplingHook',
+    ]);
+  });
+});
+
+describe('stepMatch sniper rifle', () => {
+  it('deals damage to a worm hit by the precise hitscan shot, just like the shotgun does', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const target = rt.teams[1].worms[0];
+    const shooter = rt.match.turnOrder[0].worm;
+    shooter.aimAngle = 0; // level shot toward the target, which sits at the same y
+    const sniperRifleIndex = WEAPON_KEYS.indexOf('sniperRifle') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: sniperRifleIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(target.hp).toBe(STARTING_HP - WEAPONS.sniperRifle.maxDamage);
+  });
+});
+
+describe('stepMatch grappling hook range', () => {
+  it('attaches at a longer range than the ninja rope can reach', () => {
+    const terrain = createTerrain(600, 200);
+    terrain.mask.fill(0);
+    for (let x = 400; x < 410; x++) {
+      for (let y = 0; y < 200; y++) terrain.mask[y * 600 + x] = 1;
+    }
+    const teams = twoWormTeams();
+    teams[0].worms[0].x = 0;
+    teams[0].worms[0].y = 100;
+    teams[0].worms[0].aimAngle = 0;
+    const rt = makeRuntime(teams);
+    rt.terrain = terrain;
+
+    const ninjaRopeIndex = WEAPON_KEYS.indexOf('ninjaRope') + 1;
+    stepMatch(rt, makeInput({ firing: true, selectedWeapon: ninjaRopeIndex }), 0.016);
+    expect(rt.rope).toBeNull(); // 400px away is beyond the ninja rope's 300px range
+
+    const grapplingHookIndex = WEAPON_KEYS.indexOf('grapplingHook') + 1;
+    stepMatch(rt, makeInput({ firing: true, selectedWeapon: grapplingHookIndex }), 0.016);
+    expect(rt.rope).not.toBeNull(); // within the grappling hook's 500px range
   });
 });

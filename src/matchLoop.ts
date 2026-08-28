@@ -10,7 +10,10 @@ import {
 } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2 } from './types.js';
 
-export const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
+export const WEAPON_KEYS: WeaponKey[] = [
+  'bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite',
+  'sniperRifle', 'airstrikeRocket', 'holyHandGrenade', 'mine', 'grapplingHook',
+];
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
 
@@ -52,24 +55,26 @@ function allWorms(rt: MatchRuntime): Worm[] {
 
 function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: number): void {
   const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
+  const def = WEAPONS[weaponKey];
 
-  if (weaponKey === 'shotgun') {
+  if (def.hitscan) {
     const hits: Vector2[] = [];
-    for (let i = 0; i < WEAPONS.shotgun.pellets; i++) {
-      // Non-null: shotgun's range is always defined (see WEAPONS.shotgun
-      // above); the '?' on WeaponDef.range exists only because other
-      // weapons omit it.
-      const hit = raycastHit(rt.terrain, allWorms(rt), worm.x, worm.y, fireAngle, WEAPONS.shotgun.range!, worm);
-      if (hit.type === 'worm' && hit.worm) takeDamage(hit.worm, WEAPONS.shotgun.maxDamage);
+    for (let i = 0; i < def.pellets; i++) {
+      // Non-null: every hitscan weapon (shotgun, sniperRifle) defines
+      // `range` - the '?' on WeaponDef.range exists only because
+      // non-hitscan, non-rope weapons omit it.
+      const hit = raycastHit(rt.terrain, allWorms(rt), worm.x, worm.y, fireAngle, def.range!, worm);
+      if (hit.type === 'worm' && hit.worm) takeDamage(hit.worm, def.maxDamage);
       hits.push({ x: hit.x, y: hit.y });
     }
-    // The shotgun deals damage via an instant raycast with nothing added to
-    // rt.projectiles, so without this tracer a shot is completely invisible
-    // on screen - hit or miss - which reads as the weapon doing nothing.
+    // Reused for any hitscan weapon (not just the shotgun) as the visible
+    // trace of an instant raycast shot - see the ShotgunTracer type.
     rt.shotgunTracer = { originX: worm.x, originY: worm.y, hits, timer: SHOTGUN_TRACER_DURATION };
     rt.retirementTimer = 1;
-  } else if (weaponKey === 'ninjaRope') {
-    const result = fireRope(worm.x, worm.y, fireAngle, rt.terrain, 300);
+  } else if (def.rope) {
+    // Non-null: every rope weapon (ninjaRope, grapplingHook) defines
+    // `range` as its cast distance.
+    const result = fireRope(worm.x, worm.y, fireAngle, rt.terrain, def.range!);
     rt.rope = result.attached ? result : null;
     // A grounded worm's very next physics tick would otherwise re-plant it
     // on the ground before the swing can take over - a small upward nudge

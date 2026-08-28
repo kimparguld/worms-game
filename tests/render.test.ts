@@ -72,14 +72,15 @@ describe('chargeBarColor', () => {
 });
 
 describe('weaponLabel', () => {
-  it('names each of the five selectable weapons', () => {
-    expect([1, 2, 3, 4, 5].map(weaponLabel)).toEqual([
+  it('names each of the ten selectable weapons', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(weaponLabel)).toEqual([
       'Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite',
+      'Sniper Rifle', 'Airstrike Rocket', 'Holy Hand Grenade', 'Mine', 'Grappling Hook',
     ]);
   });
 
   it('falls back to the default weapon for an out-of-range selection', () => {
-    expect(weaponLabel(9)).toBe('Bazooka');
+    expect(weaponLabel(99)).toBe('Bazooka');
   });
 });
 
