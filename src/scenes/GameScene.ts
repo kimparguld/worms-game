@@ -75,7 +75,7 @@ export class GameScene extends Phaser.Scene {
     stepMatch(this.rt, sharedInput, dt);
 
     drawTerrain(this.terrainTexture, this.rt.terrain);
-    drawScene(this.graphics, this.allWorms(), this.rt.projectiles, this.rt.match, this.rt.rope);
+    drawScene(this.graphics, this.allWorms(), this.rt.projectiles, this.rt.match, this.rt.rope, this.rt.charging, this.rt.chargePower);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
 
     const bannerAlpha = turnBannerAlpha(this.rt.turnBannerTimer ?? 0, TURN_BANNER_DURATION_MS);

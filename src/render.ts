@@ -153,6 +153,8 @@ export function drawScene(
   projectiles: Projectile[],
   matchState: MatchState,
   rope: Rope | null,
+  charging: boolean,
+  chargePower: number,
 ): void {
   graphics.clear();
 
@@ -167,20 +169,22 @@ export function drawScene(
     graphics.fillCircle(rope.anchorX, rope.anchorY, 4);
   }
 
-  // Draw a crosshair showing the active worm's current aim direction
+  // Draw a crosshair showing the active worm's current aim direction, or a
+  // growing charge bar in its place while a chargeable weapon is charging.
   if (active && active.worm.alive) {
     const worm = active.worm;
     const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
     const innerRadius = 16;
-    const outerRadius = 28;
+    const outerRadius = charging ? innerRadius + chargeBarLength(chargePower) : 28;
     const startX = worm.x + Math.cos(fireAngle) * innerRadius;
     const startY = worm.y + Math.sin(fireAngle) * innerRadius;
     const endX = worm.x + Math.cos(fireAngle) * outerRadius;
     const endY = worm.y + Math.sin(fireAngle) * outerRadius;
-    graphics.lineStyle(2.5, 0xffd966, 0.95);
+    const color = charging ? chargeBarColor(chargePower) : 0xffd966;
+    graphics.lineStyle(charging ? 4 : 2.5, color, 0.95);
     graphics.lineBetween(startX, startY, endX, endY);
-    graphics.fillStyle(0xffd966, 0.95);
-    graphics.fillCircle(endX, endY, 3);
+    graphics.fillStyle(color, 0.95);
+    graphics.fillCircle(endX, endY, charging ? 5 : 3);
   }
 
   for (const worm of worms) {
@@ -236,4 +240,22 @@ export function turnBannerAlpha(timeRemainingMs: number, durationMs: number): nu
   const fadeInAlpha = (durationMs - timeRemainingMs) / fadeMs;
   const fadeOutAlpha = timeRemainingMs / fadeMs;
   return Math.max(0, Math.min(1, fadeInAlpha, fadeOutAlpha));
+}
+
+const CHARGE_BAR_MIN_LENGTH = 20;
+const CHARGE_BAR_MAX_LENGTH = 90;
+const CHARGE_BAR_START_COLOR = { r: 0xff, g: 0xd9, b: 0x66 }; // 0xffd966
+const CHARGE_BAR_END_COLOR = { r: 0xe8, g: 0x5d, b: 0x5d }; // 0xe85d5d
+
+export function chargeBarLength(chargePower: number): number {
+  const clamped = Math.max(0, Math.min(1, chargePower));
+  return CHARGE_BAR_MIN_LENGTH + (CHARGE_BAR_MAX_LENGTH - CHARGE_BAR_MIN_LENGTH) * clamped;
+}
+
+export function chargeBarColor(chargePower: number): number {
+  const clamped = Math.max(0, Math.min(1, chargePower));
+  const r = Math.round(CHARGE_BAR_START_COLOR.r + (CHARGE_BAR_END_COLOR.r - CHARGE_BAR_START_COLOR.r) * clamped);
+  const g = Math.round(CHARGE_BAR_START_COLOR.g + (CHARGE_BAR_END_COLOR.g - CHARGE_BAR_START_COLOR.g) * clamped);
+  const b = Math.round(CHARGE_BAR_START_COLOR.b + (CHARGE_BAR_END_COLOR.b - CHARGE_BAR_START_COLOR.b) * clamped);
+  return (r << 16) | (g << 8) | b;
 }
