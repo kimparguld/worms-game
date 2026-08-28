@@ -4,28 +4,48 @@ import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey } from './t
 
 let cachedImageData: ImageData | null = null;
 let cachedRunLength: Int32Array | null = null;
+let cachedBuildingRunLength: Int32Array | null = null;
 let cachedWidth = 0;
 let cachedHeight = 0;
 
 const GRASS_DEPTH = 5;
 const DIRT_TRANSITION_DEPTH = 45;
+const BUILDING_ROOF_DEPTH = 6;
 
 export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Terrain): void {
   const { width, height } = terrain;
   if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
     cachedImageData = texture.context.createImageData(width, height);
     cachedRunLength = new Int32Array(width);
+    cachedBuildingRunLength = new Int32Array(width);
     cachedWidth = width;
     cachedHeight = height;
   }
   const imageData = cachedImageData;
   const runLength = cachedRunLength!;
+  const buildingRunLength = cachedBuildingRunLength!;
   runLength.fill(0);
+  buildingRunLength.fill(0);
 
   for (let i = 0; i < terrain.mask.length; i++) {
     const x = i % width;
     const o = i * 4;
-    if (terrain.mask[i] === 1) {
+    const cell = terrain.mask[i];
+    if (cell === 2) {
+      runLength[x] = 0;
+      buildingRunLength[x]++;
+      if (buildingRunLength[x] <= BUILDING_ROOF_DEPTH) {
+        imageData.data[o] = 90;
+        imageData.data[o + 1] = 94;
+        imageData.data[o + 2] = 102;
+      } else {
+        imageData.data[o] = 178;
+        imageData.data[o + 1] = 124;
+        imageData.data[o + 2] = 88;
+      }
+      imageData.data[o + 3] = 255;
+    } else if (cell === 1) {
+      buildingRunLength[x] = 0;
       runLength[x]++;
       if (runLength[x] <= GRASS_DEPTH) {
         imageData.data[o] = 111;
@@ -43,6 +63,7 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       imageData.data[o + 3] = 255;
     } else {
       runLength[x] = 0;
+      buildingRunLength[x] = 0;
       // Transparent - the static sky/cloud background layer shows through.
       imageData.data[o + 3] = 0;
     }
