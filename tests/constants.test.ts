@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   GRAVITY, WORM_MOVE_ACCEL, WORM_MOVE_SPEED, JUMP_IMPULSE,
   TURN_DURATION_MS, STARTING_HP, WIND_MAX,
+  WORLD_WIDTH, WORLD_HEIGHT,
 } from '../src/constants.js';
 
 describe('constants', () => {
@@ -22,5 +23,13 @@ describe('constants', () => {
 
   it('sets a wind strength that meaningfully bends wind-affected projectiles', () => {
     expect(WIND_MAX).toBe(140);
+  });
+});
+
+describe('world size', () => {
+  it('is larger than the 1280x720 viewport, in the same 16:9 ratio', () => {
+    expect(WORLD_WIDTH).toBeGreaterThan(1280);
+    expect(WORLD_HEIGHT).toBeGreaterThan(720);
+    expect(WORLD_WIDTH / WORLD_HEIGHT).toBeCloseTo(1280 / 720, 5);
   });
 });

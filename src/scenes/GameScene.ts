@@ -15,7 +15,7 @@ import {
 } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
-import { TURN_BANNER_DURATION_MS } from '../constants.js';
+import { TURN_BANNER_DURATION_MS, WORLD_WIDTH, WORLD_HEIGHT } from '../constants.js';
 import { soundSystem } from '../sound.js';
 import type { Worm, MatchRuntime } from '../types.js';
 
@@ -32,6 +32,8 @@ export class GameScene extends Phaser.Scene {
   private terrainTexture!: Phaser.Textures.CanvasTexture;
   private waterGraphics!: Phaser.GameObjects.Graphics;
   private graphics!: Phaser.GameObjects.Graphics;
+  private uiGraphics!: Phaser.GameObjects.Graphics;
+  private uiCamera!: Phaser.Cameras.Scene2D.Camera;
   private hudText!: Phaser.GameObjects.Text;
   private turnBannerText!: Phaser.GameObjects.Text;
 
@@ -58,6 +60,15 @@ export class GameScene extends Phaser.Scene {
   // footstep puffs from firing every single frame while walking.
   private dustCooldownMs = 0;
 
+  // Populated as each object is created in create(), then handed to the two
+  // cameras' .ignore() calls at the end of create(). Anything that draws at
+  // world coordinates (terrain, worms, particles...) belongs in
+  // worldObjects; anything that must stay full-size/screen-space (HUD,
+  // banner, health bars) belongs in uiObjects. A new effect added later and
+  // left off both arrays would render on *both* cameras, doubled up.
+  private worldObjects: Phaser.GameObjects.GameObject[] = [];
+  private uiObjects: Phaser.GameObjects.GameObject[] = [];
+
   constructor() {
     super('GameScene');
   }
@@ -72,27 +83,34 @@ export class GameScene extends Phaser.Scene {
     this.input.once('pointerdown', () => this.unlockAudio());
     this.input.keyboard?.once('keydown', () => this.unlockAudio());
 
-    const { width, height } = this.scale;
-    this.rt = createMatchRuntime(width, height, this.team1Name, this.team2Name);
+    const { width, height } = this.scale; // viewport size - UI-space layout only
+    this.rt = createMatchRuntime(WORLD_WIDTH, WORLD_HEIGHT, this.team1Name, this.team2Name);
 
     // Static sky/cloud backdrop, drawn once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.
     const sky = this.add.graphics();
-    drawSky(sky, width, height);
+    drawSky(sky, WORLD_WIDTH, WORLD_HEIGHT);
+    this.worldObjects.push(sky);
 
     // Sits behind the terrain layer (added next) so it's only visible where
     // terrain has been dug/blown away down to the water line; redrawn every
     // frame in update() so its surface highlight can animate.
     this.waterGraphics = this.add.graphics();
-    drawWater(this.waterGraphics, width, height, 0);
+    drawWater(this.waterGraphics, WORLD_WIDTH, WORLD_HEIGHT, 0);
+    this.worldObjects.push(this.waterGraphics);
 
     if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
     // Non-null: the line above always removes any colliding key first, so
     // createCanvas never actually returns null here.
-    this.terrainTexture = this.textures.createCanvas('terrainTex', width, height)!;
-    this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
+    this.terrainTexture = this.textures.createCanvas('terrainTex', WORLD_WIDTH, WORLD_HEIGHT)!;
+    const terrainImage = this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
+    this.worldObjects.push(terrainImage);
 
     this.graphics = this.add.graphics();
+    this.worldObjects.push(this.graphics);
+
+    this.uiGraphics = this.add.graphics();
+    this.uiObjects.push(this.uiGraphics);
 
     // The HUD panel sits top-centre, in the gap between the two team life
     // bars (which are anchored to the left and right edges by
@@ -106,6 +124,7 @@ export class GameScene extends Phaser.Scene {
     hudPanel.fillRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
     hudPanel.lineStyle(2, 0xffffff, 0.15);
     hudPanel.strokeRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
+    this.uiObjects.push(hudPanel);
 
     this.hudText = this.add.text(hudPanelX + 14, 16, '', {
       fontFamily: "'Baloo 2', sans-serif",
@@ -113,6 +132,7 @@ export class GameScene extends Phaser.Scene {
       color: '#fff8e7',
       lineSpacing: 4,
     });
+    this.uiObjects.push(this.hudText);
 
     this.turnBannerText = this.add
       .text(width / 2, height / 2 - 40, '', {
@@ -125,9 +145,10 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setAlpha(0);
+    this.uiObjects.push(this.turnBannerText);
 
-    [0, 1].forEach((i) =>
-      this.add
+    [0, 1].forEach((i) => {
+      const teamNameText = this.add
         .text(teamHealthBarX(i, width) + TEAM_BAR_WIDTH / 2, 8, this.rt.teams[i].name, {
           fontFamily: "'Baloo 2', sans-serif",
           fontSize: '16px',
@@ -136,10 +157,12 @@ export class GameScene extends Phaser.Scene {
           stroke: '#16213f',
           strokeThickness: 3,
         })
-        .setOrigin(0.5, 0),
-    );
+        .setOrigin(0.5, 0);
+      this.uiObjects.push(teamNameText);
+    });
 
     this.createParticleEmitters();
+    this.worldObjects.push(this.emberEmitter, this.debrisEmitter, this.splashEmitter, this.muzzleEmitter, this.dustEmitter);
 
     // A soft gold halo behind the active-worm ring (drawn separately in
     // render.ts) - a dedicated Image using its own radially-faded texture,
@@ -157,10 +180,26 @@ export class GameScene extends Phaser.Scene {
       halo.refresh();
     }
     this.activeWormGlow = this.add.image(0, 0, 'glowHalo').setTint(0xffd966).setBlendMode(Phaser.BlendModes.ADD);
+    this.worldObjects.push(this.activeWormGlow);
 
     // A faint darkened edge to frame the arena, not a heavy vignette - it
     // should read as depth, not as a filter someone forgot to remove.
     this.cameras.main.filters.internal.addVignette(0.5, 0.5, 1.0, 0.25);
+
+    // UI camera: screen-space, zoom 1, renders only the HUD/banner/team-name/
+    // health-bar layer built up in uiObjects above. The main camera is
+    // zoomed out to show the whole (larger) world and must not also render
+    // - and shrink - these.
+    this.uiCamera = this.cameras.add(0, 0, width, height);
+    this.uiCamera.setScroll(0, 0);
+    this.cameras.main.ignore(this.uiObjects);
+    this.uiCamera.ignore(this.worldObjects);
+
+    // Zoom the main camera out just enough that the whole (larger) world
+    // fits the viewport with no scrolling - world and viewport share a
+    // 16:9 ratio, so one zoom factor covers both axes exactly.
+    this.cameras.main.setZoom(width / WORLD_WIDTH);
+    this.cameras.main.setScroll(0, 0);
 
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
@@ -284,7 +323,7 @@ export class GameScene extends Phaser.Scene {
     if (this.rt.charging && !this.wasCharging) soundSystem.play('charge');
     this.wasCharging = this.rt.charging;
 
-    drawWater(this.waterGraphics, this.scale.width, this.scale.height, time);
+    drawWater(this.waterGraphics, WORLD_WIDTH, WORLD_HEIGHT, time);
     drawTerrain(this.terrainTexture, this.rt.terrain);
     drawScene(
       this.graphics,
@@ -301,7 +340,7 @@ export class GameScene extends Phaser.Scene {
       this.rt.explosions,
       this.rt.splashes,
     );
-    drawTeamHealthBars(this.graphics, this.rt.teams, this.scale.width);
+    drawTeamHealthBars(this.uiGraphics, this.rt.teams, this.scale.width);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
     this.triggerEffectBursts();
     this.triggerMovementDust(delta);

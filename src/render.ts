@@ -785,6 +785,7 @@ export function teamHealthBarX(index: number, canvasWidth: number): number {
 // creates exactly two teams (see matchLoop.ts's createMatchRuntime), so a
 // two-slot left/right layout is sufficient.
 export function drawTeamHealthBars(graphics: Phaser.GameObjects.Graphics, teams: Team[], canvasWidth: number): void {
+  graphics.clear();
   teams.forEach((team, index) => {
     const x = teamHealthBarX(index, canvasWidth);
     const y = TEAM_BAR_TOP;

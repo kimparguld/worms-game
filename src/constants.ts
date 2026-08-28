@@ -24,3 +24,5 @@ export const EXPLOSION_EFFECT_DURATION = 0.5; // seconds the fireball/shockwave 
 // revealed where terrain has been dug or blown away down to it.
 export const WATER_BAND_HEIGHT_FRACTION = 0.07;
 export const SPLASH_EFFECT_DURATION = 0.6; // seconds the splash visual plays when a worm hits the water
+export const WORLD_WIDTH = 1600; // px - the playable world's width; larger than the 1280 viewport so the zoomed-out camera (see GameScene) reveals more terrain
+export const WORLD_HEIGHT = 900; // px - same 16:9 ratio as the viewport, so the zoomed-out camera fits the whole world with no scrolling needed
