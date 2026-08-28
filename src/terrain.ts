@@ -25,10 +25,38 @@ const MOUNTAIN_OCTAVES = [
   { minAmplitudeFraction: 0.01, maxAmplitudeFraction: 0.02, minFrequency: 4, maxFrequency: 7 },
 ];
 
-const CLIFF_WIDTH_FRACTION = 0.04;
+const CLIFF_WIDTH_FRACTION = 0.1;
 const CLIFF_RISE_MIN_FRACTION = 0.2;
 const CLIFF_RISE_MAX_FRACTION = 0.3;
 const MAX_GROUND_HEIGHT_FRACTION = 0.72;
+
+// The four fixed worm spawn X columns, expressed as fractions of the game's
+// real 960px width (150, 200, 760, 810 - see createMatchRuntime in
+// matchLoop.ts), so this works for any terrain width, including the smaller
+// widths the tests exercise. Cliffs and buildings are kept clear of these
+// columns (plus a margin) so a worm can never spawn walled in by a cliff
+// face, or on top of / squeezed against a building.
+const SPAWN_EXCLUSION_FRACTIONS = [0.156, 0.208, 0.792, 0.844];
+// ~38px at 960 width - wide enough to keep a cliff/building's edge, not just
+// its center, clear of the spawn column.
+const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
+const SPAWN_EXCLUSION_MAX_ATTEMPTS = 10;
+
+// True if the fraction-space span [minFraction, maxFraction], widened by the
+// spawn margin on both sides, would overlap any known spawn column.
+function spanNearSpawnColumn(minFraction: number, maxFraction: number): boolean {
+  return SPAWN_EXCLUSION_FRACTIONS.some(
+    (spawnFraction) =>
+      spawnFraction >= minFraction - SPAWN_EXCLUSION_MARGIN_FRACTION &&
+      spawnFraction <= maxFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  );
+}
+
+// True if a span centered at `fraction` with the given half-width (plus the
+// spawn margin on both sides) would overlap any known spawn column.
+function isNearSpawnColumn(fraction: number, halfWidthFraction: number): boolean {
+  return spanNearSpawnColumn(fraction - halfWidthFraction, fraction + halfWidthFraction);
+}
 
 const BUILDING_COUNT_MIN = 2;
 const BUILDING_COUNT_MAX = 3;
@@ -87,17 +115,46 @@ function applyCliff(heights: Float64Array, width: number, height: number, center
   for (let x = minX; x <= maxX; x++) heights[x] = raisedHeight;
 }
 
+// Re-rolls a cliff's centerFraction (bounded retries) until its footprint -
+// including the spawn margin - clears every known spawn column, falling back
+// to the last roll if it never clears within the attempt budget (rather than
+// looping forever).
+function pickCliffCenterFraction(min: number, max: number): number {
+  const halfWidthFraction = CLIFF_WIDTH_FRACTION / 2;
+  let fraction = randomBetween(min, max);
+  for (let attempt = 0; attempt < SPAWN_EXCLUSION_MAX_ATTEMPTS; attempt++) {
+    if (!isNearSpawnColumn(fraction, halfWidthFraction)) return fraction;
+    fraction = randomBetween(min, max);
+  }
+  return fraction;
+}
+
 function applyCliffs(heights: Float64Array, width: number, height: number): void {
   // Two disjoint fraction ranges so a second cliff (if any) can never
   // overlap the first and corrupt its boundary-height reference.
-  applyCliff(heights, width, height, randomBetween(0.15, 0.45));
-  if (randomInt(1, 2) === 2) applyCliff(heights, width, height, randomBetween(0.55, 0.85));
+  applyCliff(heights, width, height, pickCliffCenterFraction(0.15, 0.45));
+  if (randomInt(1, 2) === 2) applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85));
 }
 
 function computeGroundHeights(width: number, height: number): Float64Array {
   const heights = computeMountainHeights(width, height);
   applyCliffs(heights, width, height);
   return heights;
+}
+
+// Re-rolls a building's startX (bounded retries) until its footprint -
+// including the spawn margin - clears every known spawn column, falling back
+// to the last roll if it never clears within the attempt budget.
+function pickBuildingStartX(width: number, buildingWidth: number): number {
+  const maxStart = Math.max(0, width - buildingWidth);
+  let startX = Math.round(randomBetween(0, maxStart));
+  for (let attempt = 0; attempt < SPAWN_EXCLUSION_MAX_ATTEMPTS; attempt++) {
+    const minFraction = Math.max(0, startX) / width;
+    const maxFraction = Math.min(width - 1, startX + buildingWidth) / width;
+    if (!spanNearSpawnColumn(minFraction, maxFraction)) return startX;
+    startX = Math.round(randomBetween(0, maxStart));
+  }
+  return startX;
 }
 
 // Adds flat-roofed building plateaus on top of the mountain silhouette,
@@ -116,7 +173,7 @@ function applyBuildings(heights: Float64Array, width: number, height: number): S
       1,
       Math.round(randomBetween(width * BUILDING_WIDTH_MIN_FRACTION, width * BUILDING_WIDTH_MAX_FRACTION)),
     );
-    const startX = Math.round(randomBetween(0, Math.max(0, width - buildingWidth)));
+    const startX = pickBuildingStartX(width, buildingWidth);
     const minX = Math.max(0, startX);
     const maxX = Math.min(width - 1, startX + buildingWidth);
 

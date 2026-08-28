@@ -58,16 +58,60 @@ describe('generateSilhouetteMask buildings', () => {
 describe('generateSilhouetteMask height budget', () => {
   // Nothing may reach the top of the screen: a cliff or building clipped by
   // the top edge looks broken, and a worm spawned on one lands behind the HUD.
-  it('never puts solid terrain in the top 15% of the screen', () => {
+  // The code's documented budget guarantees clear space up to y = 0.20 *
+  // height (see the comment atop terrain.ts); this pins that to 0.19 rather
+  // than a looser 0.15, leaving only a hair of margin for float rounding, so
+  // a regression that eats into the true 0.20 budget doesn't pass unnoticed.
+  it('never puts solid terrain in the top 19% of the screen', () => {
     const width = 300, height = 200;
     for (let attempt = 0; attempt < 40; attempt++) {
       const mask = generateSilhouetteMask(width, height);
-      const clearRows = Math.floor(height * 0.15);
+      const clearRows = Math.floor(height * 0.19);
       let solidInClearZone = 0;
       for (let i = 0; i < clearRows * width; i++) {
         if (mask[i] !== 0) solidInClearZone++;
       }
       expect(solidInClearZone).toBe(0);
+    }
+  });
+});
+
+describe('generateSilhouetteMask spawn columns', () => {
+  // The four worm spawn X columns are fixed in matchLoop.ts's
+  // createMatchRuntime (150, 200, 760, 810 at the game's real 960x540
+  // resolution). Neither a cliff nor a building may ever land on or hug one
+  // of these columns: a building would put mask value 2 (not walkable
+  // ground) at the spawn point, and a cliff face landing there would wall a
+  // worm in on one side, or leave a bare pixel-thin ledge to spawn on.
+  it('never puts a cliff face or a building at any of the four spawn X columns', () => {
+    const width = 960, height = 540;
+    const spawnColumns = [150, 200, 760, 810];
+    // Natural mountain terrain is smooth sine-wave silhouette: adjacent
+    // columns shift by a couple of pixels at most. A cliff, by contrast, is
+    // required elsewhere in this file to jump by at least 0.15 * height. Use
+    // a bound well below that (but comfortably above the natural slope) so
+    // this only trips on an actual cliff face landing on the spawn column.
+    const maxNaturalSlope = height * 0.05;
+
+    function surfaceHeightAndMask(mask: Uint8Array, x: number): { height: number; maskValue: number } {
+      for (let y = 0; y < height; y++) {
+        const value = mask[y * width + x];
+        if (value !== 0) return { height: height - y, maskValue: value };
+      }
+      return { height: 0, maskValue: 0 };
+    }
+
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      for (const x of spawnColumns) {
+        const here = surfaceHeightAndMask(mask, x);
+        expect(here.maskValue).toBe(1); // never building material (2) at a spawn column
+
+        const left = surfaceHeightAndMask(mask, x - 1);
+        const right = surfaceHeightAndMask(mask, x + 1);
+        expect(Math.abs(here.height - left.height)).toBeLessThan(maxNaturalSlope);
+        expect(Math.abs(here.height - right.height)).toBeLessThan(maxNaturalSlope);
+      }
     }
   });
 });
