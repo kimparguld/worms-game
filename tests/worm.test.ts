@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createWorm, takeDamage, adjustAim, updateWormPhysics } from '../src/worm.js';
+import { createWorm, takeDamage, adjustAim, updateWormPhysics, tickDeathAnimation } from '../src/worm.js';
+import { DEATH_ANIM_DURATION_MS } from '../src/constants.js';
 import { createTerrain } from '../src/terrain.js';
 import type { Terrain, WormInput } from '../src/types.js';
 
@@ -32,14 +33,57 @@ describe('createWorm', () => {
 });
 
 describe('takeDamage', () => {
-  it('reduces HP and kills the worm at zero', () => {
+  it('reduces HP without killing the worm while HP remains', () => {
     const worm = createWorm(0, 0, 'p1', 'A');
     takeDamage(worm, 30);
     expect(worm.hp).toBe(70);
     expect(worm.alive).toBe(true);
+    expect(worm.dying).toBe(false);
+  });
+
+  it('starts the death animation at zero HP without marking the worm dead yet', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
     takeDamage(worm, 100);
     expect(worm.hp).toBe(0);
+    expect(worm.alive).toBe(true);
+    expect(worm.dying).toBe(true);
+    expect(worm.deathTimer).toBe(DEATH_ANIM_DURATION_MS);
+  });
+
+  it('ignores further damage once a worm is already dying', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    takeDamage(worm, 100);
+    const timerAfterFirstHit = worm.deathTimer;
+    takeDamage(worm, 50);
+    expect(worm.deathTimer).toBe(timerAfterFirstHit);
+  });
+});
+
+describe('tickDeathAnimation', () => {
+  it('does nothing to a worm that is not dying', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    expect(tickDeathAnimation(worm, 500)).toBe(false);
+    expect(worm.alive).toBe(true);
+  });
+
+  it('counts down the death timer without finalizing early', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    takeDamage(worm, 100);
+    const finalized = tickDeathAnimation(worm, DEATH_ANIM_DURATION_MS - 100);
+    expect(finalized).toBe(false);
+    expect(worm.dying).toBe(true);
+    expect(worm.alive).toBe(true);
+    expect(worm.deathTimer).toBe(100);
+  });
+
+  it('finalizes death once the timer elapses', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    takeDamage(worm, 100);
+    const finalized = tickDeathAnimation(worm, DEATH_ANIM_DURATION_MS);
+    expect(finalized).toBe(true);
+    expect(worm.dying).toBe(false);
     expect(worm.alive).toBe(false);
+    expect(worm.deathTimer).toBeNull();
   });
 });
 

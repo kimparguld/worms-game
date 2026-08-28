@@ -10,3 +10,4 @@ export const WIND_MAX = 140; // px/s^2, max magnitude of per-turn wind accelerat
 export const WORM_STEP_HEIGHT = 10; // px the worm can step up per frame when moving horizontally while grounded
 export const TURN_BANNER_DURATION_MS = 1500; // ms the "Player N turn" banner shows on a turn switch, during which stepMatch freezes all input/physics
 export const ROPE_HOP_IMPULSE = 120; // px/s upward nudge applied when the ninja rope attaches, so a grounded worm lifts off enough for the swing physics to take over
+export const DEATH_ANIM_DURATION_MS = 900; // ms a worm spends doing its death wiggle/poof before leaving a gravestone

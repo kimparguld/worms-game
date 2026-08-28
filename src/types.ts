@@ -16,6 +16,8 @@ export interface Worm {
   aimAngle: number;
   alive: boolean;
   onGround: boolean;
+  dying: boolean;
+  deathTimer: number | null;
 }
 
 export interface WormInput {
