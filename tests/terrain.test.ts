@@ -171,6 +171,53 @@ describe('findSurfaceY', () => {
   });
 });
 
+describe('generateSilhouetteMask always has two cliffs', () => {
+  it('carves two separated near-vertical wall faces, not just one', () => {
+    const width = 200, height = 200;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      const jumps: number[] = [];
+      let prevHeight = 0;
+      for (let y = 0; y < height; y++) { if (mask[y * width + 0] === 1) { prevHeight = height - y; break; } }
+      for (let x = 1; x < width; x++) {
+        let curHeight = 0;
+        for (let y = 0; y < height; y++) { if (mask[y * width + x] === 1) { curHeight = height - y; break; } }
+        if (Math.abs(curHeight - prevHeight) > height * 0.15) jumps.push(x);
+        prevHeight = curHeight;
+      }
+      // The two cliffs are sampled from disjoint fraction ranges (0.15-0.45
+      // and 0.55-0.85), fully on either side of the map's midpoint, so a
+      // jump found in each half confirms two distinct walls rather than one
+      // wall's two edges (which sit only CLIFF_WIDTH_FRACTION apart, well
+      // within one half).
+      const leftHalfJump = jumps.some((x) => x < width * 0.5);
+      const rightHalfJump = jumps.some((x) => x >= width * 0.5);
+      expect(leftHalfJump).toBe(true);
+      expect(rightHalfJump).toBe(true);
+    }
+  });
+});
+
+describe('generateSilhouetteMask has more buildings', () => {
+  it('marks at least 3 separate building spans across a handful of attempts', () => {
+    const width = 300, height = 200;
+    let sawThreeOrMoreBuildings = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      let spans = 0;
+      let inSpan = false;
+      for (let x = 0; x < width; x++) {
+        let isBuilding = false;
+        for (let y = 0; y < height; y++) { if (mask[y * width + x] === 2) { isBuilding = true; break; } }
+        if (isBuilding && !inSpan) spans++;
+        inSpan = isBuilding;
+      }
+      if (spans >= 3) sawThreeOrMoreBuildings = true;
+    }
+    expect(sawThreeOrMoreBuildings).toBe(true);
+  });
+});
+
 describe('carveCircle', () => {
   it('clears a circular region of the mask to empty', () => {
     const terrain = createTerrain(20, 20);

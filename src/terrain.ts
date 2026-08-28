@@ -28,12 +28,12 @@ export function waterLevelY(terrain: Terrain): number {
 // or above CLIFF_RISE_MIN_FRACTION, so the ninja rope always gets a wall.
 const MOUNTAIN_BASE_FRACTION = 0.37;
 const MOUNTAIN_OCTAVES = [
-  { minAmplitudeFraction: 0.05, maxAmplitudeFraction: 0.09, minFrequency: 1, maxFrequency: 2 },
-  { minAmplitudeFraction: 0.02, maxAmplitudeFraction: 0.04, minFrequency: 2, maxFrequency: 4 },
-  { minAmplitudeFraction: 0.01, maxAmplitudeFraction: 0.02, minFrequency: 4, maxFrequency: 7 },
+  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.13, minFrequency: 1, maxFrequency: 2 },
+  { minAmplitudeFraction: 0.03, maxAmplitudeFraction: 0.06, minFrequency: 2, maxFrequency: 4 },
+  { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 7 },
 ];
 
-const CLIFF_WIDTH_FRACTION = 0.1;
+const CLIFF_WIDTH_FRACTION = 0.13;
 const CLIFF_RISE_MIN_FRACTION = 0.2;
 const CLIFF_RISE_MAX_FRACTION = 0.3;
 const MAX_GROUND_HEIGHT_FRACTION = 0.72;
@@ -111,8 +111,8 @@ function sampleExcludingSpawnColumns(rangeMin: number, rangeMax: number, halfWid
   return allowed[allowed.length - 1][1];
 }
 
-const BUILDING_COUNT_MIN = 2;
-const BUILDING_COUNT_MAX = 3;
+const BUILDING_COUNT_MIN = 3;
+const BUILDING_COUNT_MAX = 4;
 const BUILDING_WIDTH_MIN_FRACTION = 0.06;
 const BUILDING_WIDTH_MAX_FRACTION = 0.11;
 const BUILDING_RISE_MIN_FRACTION = 0.14;
@@ -176,14 +176,14 @@ function pickCliffCenterFraction(min: number, max: number): number {
 }
 
 function applyCliffs(heights: Float64Array, width: number, height: number): void {
-  // Two disjoint fraction ranges so a second cliff (if any) can never
-  // overlap the first and corrupt its boundary-height reference.
+  // Two disjoint fraction ranges so a second cliff can never overlap the
+  // first and corrupt its boundary-height reference.
   applyCliff(heights, width, height, pickCliffCenterFraction(0.15, 0.45));
-  if (randomInt(1, 2) === 2) applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85));
+  applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85));
 }
 
-const LAKE_COUNT_MIN = 1;
-const LAKE_COUNT_MAX = 2;
+const LAKE_COUNT_MIN = 2;
+const LAKE_COUNT_MAX = 3;
 const LAKE_WIDTH_MIN_FRACTION = 0.05;
 const LAKE_WIDTH_MAX_FRACTION = 0.12;
 // A lake's center dips to just below the water line (see waterLevelY), so
