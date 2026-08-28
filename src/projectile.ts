@@ -4,7 +4,9 @@ import { takeDamage } from './worm.js';
 import { GRAVITY } from './constants.js';
 import type { Terrain, Worm, WeaponDef, WeaponKey, Projectile, ProjectileUpdateResult } from './types.js';
 
-export function createProjectile(weaponKey: WeaponKey, x: number, y: number, angle: number, power: number): Projectile {
+export function createProjectile(
+  weaponKey: WeaponKey, x: number, y: number, angle: number, power: number, owner?: Worm,
+): Projectile {
   const def = WEAPONS[weaponKey];
   const speed = def.minSpeed + (def.maxSpeed - def.minSpeed) * power;
   return {
@@ -14,8 +16,14 @@ export function createProjectile(weaponKey: WeaponKey, x: number, y: number, ang
     vy: Math.sin(angle) * speed,
     fuseRemaining: def.fuseTime,
     alive: true,
+    owner,
   };
 }
+
+// Radius (px) within which a projectile counts as touching a worm - roughly
+// a worm's body width, matching the hit radius raycastHit uses for the
+// shotgun's hitscan pellets.
+const WORM_HIT_RADIUS = 10;
 
 export function updateProjectile(
   projectile: Projectile,
@@ -62,8 +70,19 @@ export function updateProjectile(
 
   const fuseExpired = isFuseBased && projectile.fuseRemaining != null && projectile.fuseRemaining <= 0;
   const hitTerrain = isSolid(terrain, projectile.x, projectile.y);
+  // A direct hit on any worm other than whoever fired it always detonates
+  // the shot immediately - without this, a projectile that never happens to
+  // touch terrain near a worm (e.g. hitting one square in the torso mid-air)
+  // sails straight through it, dealing no damage at all.
+  const hitWorm = worms.find(
+    (w) => w.alive && !w.dying && w !== projectile.owner && Math.hypot(w.x - projectile.x, w.y - projectile.y) < WORM_HIT_RADIUS,
+  );
 
   if (isFuseBased) {
+    if (hitWorm) {
+      explode(projectile, terrain, worms, def);
+      return { exploded: true };
+    }
     if (hitTerrain) {
       projectile.x = prevX;
       projectile.y = prevY;
@@ -82,7 +101,7 @@ export function updateProjectile(
     return { exploded: false };
   }
 
-  if (hitTerrain) {
+  if (hitTerrain || hitWorm) {
     explode(projectile, terrain, worms, def);
     return { exploded: true };
   }

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { drawSky } from '../render.js';
+import { soundSystem } from '../sound.js';
 
 const CONTROLS = [
   'Arrow Left / Right - Move',
@@ -109,6 +110,8 @@ export class StartScene extends Phaser.Scene {
   }
 
   private handleKey(event: KeyboardEvent): void {
+    soundSystem.unlock();
+    soundSystem.startTheme();
     if (event.key === 'Tab') {
       event.preventDefault();
       this.activeField = this.activeField === 0 ? 1 : 0;

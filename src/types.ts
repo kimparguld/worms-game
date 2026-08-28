@@ -84,6 +84,9 @@ export interface Projectile {
   vy: number;
   fuseRemaining: number | null;
   alive: boolean;
+  // The worm that fired it, excluded from direct-hit detection so a shot
+  // doesn't detonate the instant it leaves its own shooter's position.
+  owner?: Worm;
 }
 
 export interface ProjectileUpdateResult {

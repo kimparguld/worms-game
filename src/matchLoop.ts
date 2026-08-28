@@ -76,7 +76,7 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
     // lifts it clear so updateRopeSwing actually gets to run the swing.
     if (result.attached) worm.vy -= ROPE_HOP_IMPULSE;
   } else {
-    rt.projectiles.push(createProjectile(weaponKey, worm.x, worm.y, fireAngle, power));
+    rt.projectiles.push(createProjectile(weaponKey, worm.x, worm.y, fireAngle, power, worm));
     rt.retirementTimer = 2;
   }
 }
@@ -107,10 +107,14 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     }
   }
 
-  // Apply physics to all worms: real input for active worm, neutral input for others
+  // Apply physics to all worms: real input for active worm, neutral input for others.
+  // The active worm also gets neutral input while its shot is retiring
+  // (rt.retirementTimer set) - it fired, so it shouldn't be able to walk
+  // away before its own turn actually ends.
   const neutralInput: WormInput = { left: false, right: false, jump: false };
+  const isRetiring = rt.retirementTimer !== null;
   for (const w of allWorms(rt)) {
-    const wormInput = w === worm ? input : neutralInput;
+    const wormInput = w === worm && !isRetiring ? input : neutralInput;
     const wasAlive = w.alive;
     updateWormPhysics(w, rt.terrain, wormInput, dt);
     // alive flipping straight to false (skipping the dying/wiggle state) only
@@ -183,7 +187,10 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
 
   if (rt.retirementTimer !== null) {
     rt.retirementTimer -= dt;
-    if (rt.retirementTimer <= 0 && rt.projectiles.length === 0) {
+    // Also wait for any in-flight explosion's visual to finish, not just for
+    // the projectile itself to be gone - otherwise the turn (and the next
+    // worm's turn banner) can cut in while the blast is still on screen.
+    if (rt.retirementTimer <= 0 && rt.projectiles.length === 0 && rt.explosions.length === 0) {
       advanceTurn(rt.match);
       turnAdvanced = true;
     }

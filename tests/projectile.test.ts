@@ -34,6 +34,32 @@ describe('updateProjectile', () => {
     expect(worm.hp).toBeLessThan(100);
   });
 
+  it('explodes a bazooka on direct contact with a worm floating in open air, away from any terrain', () => {
+    const terrain = flatTerrain(200, 200, 190); // ground far below, out of the flight path
+    // Close and fast enough that gravity's drop over the short flight stays
+    // well under the worm-hit radius, so a near-miss on the y-axis doesn't
+    // make this test flaky.
+    const worm = createWorm(50, 50, 'p2', 'Bob');
+    const projectile = createProjectile('bazooka', 0, 50, 0, 1); // fired flat, straight at the worm
+    let result: ProjectileUpdateResult | undefined;
+    for (let i = 0; i < 30 && !(result && result.exploded); i++) {
+      result = updateProjectile(projectile, terrain, [worm], 0, 1 / 60);
+    }
+    expect(result!.exploded).toBe(true);
+    expect(worm.hp).toBeLessThan(100);
+  });
+
+  it('does not self-detonate on the worm that fired it', () => {
+    const terrain = flatTerrain(200, 200, 190);
+    const shooter = createWorm(0, 50, 'p1', 'Shooter');
+    const projectile = createProjectile('bazooka', 0, 50, 0, 1, shooter);
+    // One tick, still essentially at the shooter's own position - without
+    // the owner exclusion this would explode immediately.
+    const result = updateProjectile(projectile, terrain, [shooter], 0, 1 / 60);
+    expect(result.exploded).toBe(false);
+    expect(shooter.hp).toBe(100);
+  });
+
   it('bounces a grenade off terrain until its fuse expires', () => {
     const terrain = flatTerrain(200, 200, 100);
     const projectile = createProjectile('grenade', 60, 50, Math.PI / 2, 1);

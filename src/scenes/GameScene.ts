@@ -2,12 +2,21 @@ import Phaser from 'phaser';
 import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../matchLoop.js';
 import { checkWinner, currentWorm } from '../game.js';
 import {
-  drawTerrain, drawScene, updateHud, drawSky, drawWater, turnBannerAlpha, turnBannerLabel, drawTeamHealthBars,
-  teamHealthBarX, TEAM_BAR_WIDTH,
+  drawTerrain,
+  drawScene,
+  updateHud,
+  drawSky,
+  drawWater,
+  turnBannerAlpha,
+  turnBannerLabel,
+  drawTeamHealthBars,
+  teamHealthBarX,
+  TEAM_BAR_WIDTH,
 } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
 import { TURN_BANNER_DURATION_MS } from '../constants.js';
+import { soundSystem } from '../sound.js';
 import type { Worm, MatchRuntime } from '../types.js';
 
 interface GameSceneData {
@@ -41,7 +50,9 @@ export class GameScene extends Phaser.Scene {
   private burstedExplosions = new WeakSet<object>();
   private burstedSplashes = new WeakSet<object>();
   private burstedProjectiles = new WeakSet<object>();
+  private burstedShotgunTracers = new WeakSet<object>();
   private bannerWasVisible = false;
+  private wasCharging = false;
   // Counts down in triggerMovementDust; only one worm can act per turn, so
   // a single shared cooldown (rather than one per worm) is enough to keep
   // footstep puffs from firing every single frame while walking.
@@ -58,6 +69,8 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     resetInputState(sharedInput);
+    this.input.once('pointerdown', () => this.unlockAudio());
+    this.input.keyboard?.once('keydown', () => this.unlockAudio());
 
     const { width, height } = this.scale;
     this.rt = createMatchRuntime(width, height, this.team1Name, this.team2Name);
@@ -220,6 +233,7 @@ export class GameScene extends Phaser.Scene {
     for (const ex of this.rt.explosions) {
       if (this.burstedExplosions.has(ex)) continue;
       this.burstedExplosions.add(ex);
+      soundSystem.play('explosion');
       this.emberEmitter.explode(18, ex.x, ex.y);
       this.debrisEmitter.explode(10, ex.x, ex.y);
       const intensity = Phaser.Math.Clamp(ex.radius / 900, 0.002, 0.012);
@@ -233,12 +247,19 @@ export class GameScene extends Phaser.Scene {
     for (const sp of this.rt.splashes) {
       if (this.burstedSplashes.has(sp)) continue;
       this.burstedSplashes.add(sp);
+      soundSystem.play('splash');
       this.splashEmitter.explode(14, sp.x, sp.y);
     }
     for (const p of this.rt.projectiles) {
       if (this.burstedProjectiles.has(p)) continue;
       this.burstedProjectiles.add(p);
+      soundSystem.play('fire');
       this.muzzleEmitter.explode(8, p.x, p.y);
+    }
+    const tracer = this.rt.shotgunTracer;
+    if (tracer && !this.burstedShotgunTracers.has(tracer)) {
+      this.burstedShotgunTracers.add(tracer);
+      soundSystem.play('shotgun');
     }
   }
 
@@ -260,6 +281,8 @@ export class GameScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     const dt = Math.min(0.05, delta / 1000);
     stepMatch(this.rt, sharedInput, dt);
+    if (this.rt.charging && !this.wasCharging) soundSystem.play('charge');
+    this.wasCharging = this.rt.charging;
 
     drawWater(this.waterGraphics, this.scale.width, this.scale.height, time);
     drawTerrain(this.terrainTexture, this.rt.terrain);
@@ -288,6 +311,7 @@ export class GameScene extends Phaser.Scene {
     this.turnBannerText.setAlpha(bannerAlpha);
     if (bannerAlpha > 0) this.turnBannerText.setText(turnBannerLabel(currentWorm(this.rt.match).playerId));
     if (bannerAlpha > 0 && !this.bannerWasVisible) {
+      soundSystem.play('turn');
       // Pop the banner in with a quick overshoot instead of a hard alpha
       // snap, so a turn switch reads as an announcement, not a glitch.
       this.turnBannerText.setScale(0.7);
@@ -318,5 +342,10 @@ export class GameScene extends Phaser.Scene {
 
   private allWorms(): Worm[] {
     return this.rt.teams.flatMap((t) => t.worms);
+  }
+
+  private unlockAudio(): void {
+    soundSystem.unlock();
+    soundSystem.startTheme();
   }
 }

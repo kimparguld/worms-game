@@ -207,6 +207,32 @@ describe('stepMatch retirement timer', () => {
     expect(rt.match.currentIndex).toBe(beforeIndex);
     expect(rt.retirementTimer).not.toBeNull();
   });
+
+  it('waits for the explosion visual to finish, not just for the projectile to be gone, before advancing the turn', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.retirementTimer = 0.01;
+    rt.projectiles = [];
+    rt.explosions = [{ x: 10, y: 10, radius: 40, timer: 0.3 }];
+    const input = makeInput();
+    const beforeIndex = rt.match.currentIndex;
+
+    stepMatch(rt, input, 0.02);
+
+    expect(rt.match.currentIndex).toBe(beforeIndex);
+    expect(rt.retirementTimer).not.toBeNull();
+  });
+
+  it('freezes the active worm\'s own movement while its shot is retiring', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.retirementTimer = 1;
+    const worm = rt.teams[0].worms[0];
+    const startX = worm.x;
+    const input = makeInput({ right: true });
+
+    stepMatch(rt, input, 0.1);
+
+    expect(worm.x).toBe(startX);
+  });
 });
 
 describe('stepMatch turn-timer / retirement interaction', () => {
