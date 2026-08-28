@@ -3,11 +3,12 @@ import { drawSky } from '../render.js';
 import { soundSystem } from '../sound.js';
 
 const CONTROLS = [
-  'Arrow Left / Right - Move',
-  'Arrow Up / Down - Aim',
-  'Space - Jump',
-  'Enter (hold) - Charge and fire weapon',
-  '1-5 - Select weapon (Bazooka, Grenade, Shotgun, Ninja Rope, Dynamite)',
+  'Arrow Left/Right or A/D - Move',
+  'Arrow Up/Down or W/S - Aim',
+  'Enter - Jump',
+  'Space (hold) - Charge and fire weapon',
+  '1-9, 0 - Select weapon (Bazooka, Grenade, Shotgun, Ninja Rope, Dynamite,',
+  'Sniper Rifle, Airstrike Rocket, Holy Hand Grenade, Mine, Grappling Hook)',
   'Backspace / Esc - End turn',
 ];
 
@@ -45,7 +46,7 @@ export class StartScene extends Phaser.Scene {
       .setOrigin(0.5, 0);
 
     const panelWidth = 720;
-    const panelHeight = 230;
+    const panelHeight = 250;
     const panel = this.add.graphics();
     panel.fillStyle(0x0f172e, 0.65);
     panel.fillRoundedRect(centerX - panelWidth / 2, centerY - panelHeight / 2 - 10, panelWidth, panelHeight, 16);
