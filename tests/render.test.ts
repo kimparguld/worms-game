@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel,
-  fuseBlinkFrequency, projectileBlinkOn,
+  fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
@@ -123,5 +123,33 @@ describe('projectileBlinkOn', () => {
     }
 
     expect(lateToggles).toBeGreaterThan(earlyToggles);
+  });
+});
+
+describe('deathWiggleRotation', () => {
+  it('has no rotation at the very start of the animation', () => {
+    expect(deathWiggleRotation(0, 900)).toBe(0);
+  });
+
+  it('swings wider later in the animation than earlier (the envelope grows with elapsed time)', () => {
+    // Both points land on a peak of the wiggle's oscillation (sin term = 1),
+    // isolating the growing envelope from the oscillation itself.
+    const early = deathWiggleRotation(75, 900); // fraction 1/12
+    const late = deathWiggleRotation(675, 900); // fraction 3/4
+    expect(late).toBeGreaterThan(early);
+  });
+});
+
+describe('deathWiggleScale', () => {
+  it('starts at the neutral scale', () => {
+    expect(deathWiggleScale(0, 900)).toBe(1);
+  });
+
+  it('stays within a small bounce range around the neutral scale', () => {
+    for (let ms = 0; ms <= 900; ms += 50) {
+      const scale = deathWiggleScale(ms, 900);
+      expect(scale).toBeGreaterThanOrEqual(0.84);
+      expect(scale).toBeLessThanOrEqual(1.16);
+    }
   });
 });

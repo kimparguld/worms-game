@@ -1,8 +1,8 @@
 import type Phaser from 'phaser';
-import { STARTING_HP } from './constants.js';
+import { STARTING_HP, DEATH_ANIM_DURATION_MS } from './constants.js';
 import { WEAPON_KEYS } from './matchLoop.js';
 import { WEAPONS } from './weapons.js';
-import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team } from './types.js';
+import type { Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team, Gravestone } from './types.js';
 
 let cachedImageData: ImageData | null = null;
 let cachedRunLength: Int32Array | null = null;
@@ -207,6 +207,58 @@ function drawWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, isActive: b
   graphics.strokePath();
 }
 
+const DEATH_WIGGLE_END_FRACTION = 0.8; // last 20% of the animation is the "poof" burst instead of the wiggle
+
+export function deathWiggleRotation(elapsedMs: number, durationMs: number): number {
+  const fraction = Math.max(0, Math.min(1, elapsedMs / durationMs));
+  // Spins increasingly wildly as the worm's last moment approaches.
+  return Math.sin(fraction * Math.PI * 6) * fraction * (Math.PI / 2);
+}
+
+export function deathWiggleScale(elapsedMs: number, durationMs: number): number {
+  const fraction = Math.max(0, Math.min(1, elapsedMs / durationMs));
+  // A quick squash-and-stretch bounce for comic effect.
+  return 1 + Math.sin(fraction * Math.PI * 8) * 0.15;
+}
+
+function drawDyingWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, elapsedMs: number): void {
+  const fraction = Math.max(0, Math.min(1, elapsedMs / DEATH_ANIM_DURATION_MS));
+
+  if (fraction >= DEATH_WIGGLE_END_FRACTION) {
+    // The wiggle hands off to a quick expanding "poof" instead of the worm body.
+    const poofFraction = (fraction - DEATH_WIGGLE_END_FRACTION) / (1 - DEATH_WIGGLE_END_FRACTION);
+    graphics.lineStyle(3, 0xfff8e7, 1 - poofFraction);
+    graphics.strokeCircle(worm.x, worm.y, 6 + poofFraction * 26);
+    graphics.lineStyle(2, 0xffd966, 1 - poofFraction);
+    graphics.strokeCircle(worm.x, worm.y, 2 + poofFraction * 16);
+    return;
+  }
+
+  const rotation = deathWiggleRotation(elapsedMs, DEATH_ANIM_DURATION_MS);
+  const scale = deathWiggleScale(elapsedMs, DEATH_ANIM_DURATION_MS);
+  graphics.save();
+  graphics.translateCanvas(worm.x, worm.y);
+  graphics.rotateCanvas(rotation);
+  graphics.scaleCanvas(scale, scale);
+  graphics.translateCanvas(-worm.x, -worm.y);
+  drawWorm(graphics, worm, false);
+  graphics.restore();
+}
+
+export function drawGravestones(graphics: Phaser.GameObjects.Graphics, gravestones: Gravestone[]): void {
+  for (const stone of gravestones) {
+    graphics.fillStyle(0x000000, 0.18);
+    graphics.fillEllipse(stone.x, stone.y + 9, 16, 5);
+    graphics.fillStyle(0x9aa0a6, 1);
+    graphics.fillRoundedRect(stone.x - 7, stone.y - 9, 14, 16, { tl: 7, tr: 7, bl: 2, br: 2 });
+    graphics.lineStyle(1.5, 0x6b7076, 1);
+    graphics.strokeRoundedRect(stone.x - 7, stone.y - 9, 14, 16, { tl: 7, tr: 7, bl: 2, br: 2 });
+    graphics.lineStyle(1.5, 0x6b7076, 0.9);
+    graphics.lineBetween(stone.x - 3, stone.y - 3, stone.x + 3, stone.y - 3);
+    graphics.lineBetween(stone.x, stone.y - 6, stone.x, stone.y - 0.5);
+  }
+}
+
 const PROJECTILE_COLORS: Record<WeaponKey, number> = {
   bazooka: 0xff5722,
   grenade: 0x6fbf4a,
@@ -244,8 +296,10 @@ export function drawScene(
   rope: Rope | null,
   charging: boolean,
   chargePower: number,
+  gravestones: Gravestone[],
 ): void {
   graphics.clear();
+  drawGravestones(graphics, gravestones);
 
   const active = matchState.turnOrder[matchState.currentIndex];
 
@@ -278,6 +332,10 @@ export function drawScene(
 
   for (const worm of worms) {
     if (!worm.alive) continue;
+    if (worm.dying) {
+      drawDyingWorm(graphics, worm, DEATH_ANIM_DURATION_MS - (worm.deathTimer ?? 0));
+      continue;
+    }
     drawWorm(graphics, worm, Boolean(active && worm === active.worm));
 
     const barWidth = 26;

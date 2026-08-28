@@ -82,7 +82,16 @@ export class GameScene extends Phaser.Scene {
     stepMatch(this.rt, sharedInput, dt);
 
     drawTerrain(this.terrainTexture, this.rt.terrain);
-    drawScene(this.graphics, this.allWorms(), this.rt.projectiles, this.rt.match, this.rt.rope, this.rt.charging, this.rt.chargePower);
+    drawScene(
+      this.graphics,
+      this.allWorms(),
+      this.rt.projectiles,
+      this.rt.match,
+      this.rt.rope,
+      this.rt.charging,
+      this.rt.chargePower,
+      this.rt.gravestones,
+    );
     drawTeamHealthBars(this.graphics, this.rt.teams, this.scale.width);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
 
