@@ -7,7 +7,7 @@ import { fireRope, updateRopeSwing } from './rope.js';
 import { TURN_BANNER_DURATION_MS } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime } from './types.js';
 
-const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
+export const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
 
@@ -27,7 +27,7 @@ export function createMatchRuntime(width: number, height: number): MatchRuntime 
     charging: false,
     chargePower: 0,
     retirementTimer: null,
-    turnBannerTimer: null,
+    turnBannerTimer: TURN_BANNER_DURATION_MS,
   };
 }
 
@@ -62,6 +62,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   if (rt.turnBannerTimer !== null) {
     rt.turnBannerTimer -= dt * 1000;
     if (rt.turnBannerTimer <= 0) rt.turnBannerTimer = null;
+    input.endTurnRequested = false; // don't let a keypress during the banner leak into the new turn
     return;
   }
 

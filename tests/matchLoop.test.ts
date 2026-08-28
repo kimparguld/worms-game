@@ -58,7 +58,7 @@ describe('createMatchRuntime', () => {
     expect(rt.charging).toBe(false);
     expect(rt.chargePower).toBe(0);
     expect(rt.retirementTimer).toBeNull();
-    expect(rt.turnBannerTimer).toBeNull();
+    expect(rt.turnBannerTimer).toBe(TURN_BANNER_DURATION_MS);
   });
 });
 
@@ -295,5 +295,32 @@ describe('stepMatch turn banner', () => {
     const originalX = worm.x;
     stepMatch(rt, makeInput({ left: true }), 0.5); // banner is gone - input processes normally again
     expect(worm.x).not.toBe(originalX);
+  });
+
+  it('does not let an endTurnRequested keypress during the banner freeze leak into the new turn', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.turnBannerTimer = 50; // 50ms left in the banner
+    const indexAtBannerStart = rt.match.currentIndex;
+    // A real input object is mutated in place frame to frame (set on
+    // keydown, expected to be consumed/cleared as frames process it), so
+    // reusing the same object across both calls is what actually exercises
+    // the latch: without the fix, the freeze's early return skips clearing
+    // it, leaving it true for the next stepMatch call.
+    const input = makeInput({ endTurnRequested: true });
+
+    // Player presses Esc/Backspace while the banner is still showing - this
+    // must NOT be allowed to end the incoming player's turn once the banner
+    // clears on a later frame.
+    stepMatch(rt, input, 0.1); // 100ms tick clears the 50ms-remaining banner
+
+    expect(rt.turnBannerTimer).toBeNull();
+    expect(input.endTurnRequested).toBe(false); // must not survive the freeze
+    expect(rt.match.currentIndex).toBe(indexAtBannerStart);
+
+    // The very next unfrozen frame: if the flag had latched through, this
+    // call would silently end the turn that just started.
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.match.currentIndex).toBe(indexAtBannerStart);
   });
 });
