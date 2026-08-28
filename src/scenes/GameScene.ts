@@ -24,8 +24,6 @@ export class GameScene extends Phaser.Scene {
   private graphics!: Phaser.GameObjects.Graphics;
   private hudText!: Phaser.GameObjects.Text;
   private turnBannerText!: Phaser.GameObjects.Text;
-  // @ts-expect-error - stored for potential future use
-  private teamNameText!: [Phaser.GameObjects.Text, Phaser.GameObjects.Text];
 
   constructor() {
     super('GameScene');
@@ -87,7 +85,7 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setAlpha(0);
 
-    this.teamNameText = [0, 1].map((i) =>
+    [0, 1].forEach((i) =>
       this.add
         .text(teamHealthBarX(i, width) + TEAM_BAR_WIDTH / 2, 8, this.rt.teams[i].name, {
           fontFamily: "'Baloo 2', sans-serif",
@@ -98,7 +96,7 @@ export class GameScene extends Phaser.Scene {
           strokeThickness: 3,
         })
         .setOrigin(0.5, 0),
-    ) as [Phaser.GameObjects.Text, Phaser.GameObjects.Text];
+    );
 
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
