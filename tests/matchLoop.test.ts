@@ -36,15 +36,15 @@ function makeRuntime(teams: Team[]): MatchRuntime {
 
 function twoWormTeams(): Team[] {
   return [
-    { playerId: 'p1', worms: [createWorm(50, 149, 'p1', 'A')] },
-    { playerId: 'p2', worms: [createWorm(150, 149, 'p2', 'B')] },
+    { playerId: 'p1', name: 'Team 1', worms: [createWorm(50, 149, 'p1', 'A')] },
+    { playerId: 'p2', name: 'Team 2', worms: [createWorm(150, 149, 'p2', 'B')] },
   ];
 }
 
 function fourWormTeams(): Team[] {
   return [
-    { playerId: 'p1', worms: [createWorm(50, 149, 'p1', 'A'), createWorm(70, 149, 'p1', 'B')] },
-    { playerId: 'p2', worms: [createWorm(150, 149, 'p2', 'C'), createWorm(170, 149, 'p2', 'D')] },
+    { playerId: 'p1', name: 'Team 1', worms: [createWorm(50, 149, 'p1', 'A'), createWorm(70, 149, 'p1', 'B')] },
+    { playerId: 'p2', name: 'Team 2', worms: [createWorm(150, 149, 'p2', 'C'), createWorm(170, 149, 'p2', 'D')] },
   ];
 }
 
@@ -61,6 +61,18 @@ describe('createMatchRuntime', () => {
     expect(rt.retirementTimer).toBeNull();
     expect(rt.turnBannerTimer).toBe(TURN_BANNER_DURATION_MS);
     expect(rt.gravestones).toEqual([]);
+  });
+
+  it('defaults team names to "Team 1" and "Team 2" when none are given', () => {
+    const rt = createMatchRuntime(960, 540);
+    expect(rt.teams[0].name).toBe('Team 1');
+    expect(rt.teams[1].name).toBe('Team 2');
+  });
+
+  it('uses the given team names when provided', () => {
+    const rt = createMatchRuntime(960, 540, 'Sharks', 'Jets');
+    expect(rt.teams[0].name).toBe('Sharks');
+    expect(rt.teams[1].name).toBe('Jets');
   });
 });
 

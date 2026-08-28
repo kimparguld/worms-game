@@ -71,19 +71,19 @@ describe('weaponLabel', () => {
 
 describe('teamHealthFraction', () => {
   it('is 1 when every worm is at full health', () => {
-    const team = { playerId: 'p1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
+    const team = { playerId: 'p1', name: 'Team 1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
     expect(teamHealthFraction(team)).toBe(1);
   });
 
   it('is the sum of remaining hp over the sum of max hp', () => {
-    const team = { playerId: 'p1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
+    const team = { playerId: 'p1', name: 'Team 1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
     team.worms[0].hp = 50; // out of 100
     team.worms[1].hp = 100;
     expect(teamHealthFraction(team)).toBe(0.75); // (50 + 100) / (100 + 100)
   });
 
   it('is 0 for a team with no worms', () => {
-    expect(teamHealthFraction({ playerId: 'p1', worms: [] })).toBe(0);
+    expect(teamHealthFraction({ playerId: 'p1', name: 'Team 1', worms: [] })).toBe(0);
   });
 });
 

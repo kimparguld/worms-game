@@ -28,6 +28,7 @@ export interface WormInput {
 
 export interface Team {
   playerId: string;
+  name: string;
   worms: Worm[];
 }
 

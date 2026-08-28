@@ -5,8 +5,8 @@ import type { Team } from '../src/types.js';
 
 function makeTeams(): Team[] {
   return [
-    { playerId: 'p1', worms: [createWorm(0, 0, 'p1', 'A1'), createWorm(0, 0, 'p1', 'A2')] },
-    { playerId: 'p2', worms: [createWorm(0, 0, 'p2', 'B1'), createWorm(0, 0, 'p2', 'B2')] },
+    { playerId: 'p1', name: 'Team 1', worms: [createWorm(0, 0, 'p1', 'A1'), createWorm(0, 0, 'p1', 'A2')] },
+    { playerId: 'p2', name: 'Team 2', worms: [createWorm(0, 0, 'p2', 'B1'), createWorm(0, 0, 'p2', 'B2')] },
   ];
 }
 

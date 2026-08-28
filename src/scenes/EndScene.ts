@@ -41,7 +41,7 @@ export class EndScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(centerX, centerY + 44, 'Press any key to restart', {
+      .text(centerX, centerY + 44, 'Press any key to continue', {
         fontFamily: "'Baloo 2', sans-serif",
         fontSize: '22px',
         fontStyle: '700',
@@ -53,7 +53,7 @@ export class EndScene extends Phaser.Scene {
       // Non-null: safe unless the Phaser config explicitly disables
       // keyboard input (input.keyboard: false), which it does not here.
       this.input.keyboard!.once('keydown', () => {
-        this.scene.start('GameScene');
+        this.scene.start('StartScene');
       });
     });
   }

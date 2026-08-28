@@ -7,8 +7,15 @@ import { resetInputState } from '../input.js';
 import { TURN_BANNER_DURATION_MS } from '../constants.js';
 import type { Worm, MatchRuntime } from '../types.js';
 
+interface GameSceneData {
+  team1Name?: string;
+  team2Name?: string;
+}
+
 export class GameScene extends Phaser.Scene {
   private rt!: MatchRuntime;
+  private team1Name = 'Team 1';
+  private team2Name = 'Team 2';
 
   private terrainTexture!: Phaser.Textures.CanvasTexture;
   private graphics!: Phaser.GameObjects.Graphics;
@@ -19,11 +26,16 @@ export class GameScene extends Phaser.Scene {
     super('GameScene');
   }
 
+  init(data: GameSceneData): void {
+    this.team1Name = data.team1Name ?? 'Team 1';
+    this.team2Name = data.team2Name ?? 'Team 2';
+  }
+
   create(): void {
     resetInputState(sharedInput);
 
     const { width, height } = this.scale;
-    this.rt = createMatchRuntime(width, height);
+    this.rt = createMatchRuntime(width, height, this.team1Name, this.team2Name);
 
     // Static sky/cloud backdrop, drawn once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.

@@ -11,12 +11,17 @@ export const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninja
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
 
-export function createMatchRuntime(width: number, height: number): MatchRuntime {
+export function createMatchRuntime(
+  width: number,
+  height: number,
+  team1Name = 'Team 1',
+  team2Name = 'Team 2',
+): MatchRuntime {
   const terrain = createTerrain(width, height);
   const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
   const teams: Team[] = [
-    { playerId: 'p1', worms: [createWorm(150, spawnY(150), 'p1', 'W1'), createWorm(200, spawnY(200), 'p1', 'W2')] },
-    { playerId: 'p2', worms: [createWorm(760, spawnY(760), 'p2', 'W3'), createWorm(810, spawnY(810), 'p2', 'W4')] },
+    { playerId: 'p1', name: team1Name, worms: [createWorm(150, spawnY(150), 'p1', 'W1'), createWorm(200, spawnY(200), 'p1', 'W2')] },
+    { playerId: 'p2', name: team2Name, worms: [createWorm(760, spawnY(760), 'p2', 'W3'), createWorm(810, spawnY(810), 'p2', 'W4')] },
   ];
   return {
     terrain,
