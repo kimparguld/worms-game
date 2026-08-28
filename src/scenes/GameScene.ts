@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import { createMatchRuntime, stepMatch } from '../matchLoop.js';
-import { checkWinner } from '../game.js';
-import { drawTerrain, drawScene, updateHud, drawSky } from '../render.js';
+import { checkWinner, currentWorm } from '../game.js';
+import { drawTerrain, drawScene, updateHud, drawSky, turnBannerAlpha, turnBannerLabel } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
+import { TURN_BANNER_DURATION_MS } from '../constants.js';
 import type { Worm, MatchRuntime } from '../types.js';
 
 export class GameScene extends Phaser.Scene {
@@ -12,6 +13,7 @@ export class GameScene extends Phaser.Scene {
   private terrainTexture!: Phaser.Textures.CanvasTexture;
   private graphics!: Phaser.GameObjects.Graphics;
   private hudText!: Phaser.GameObjects.Text;
+  private turnBannerText!: Phaser.GameObjects.Text;
 
   constructor() {
     super('GameScene');
@@ -49,6 +51,18 @@ export class GameScene extends Phaser.Scene {
       lineSpacing: 4,
     });
 
+    this.turnBannerText = this.add
+      .text(width / 2, height / 2 - 40, '', {
+        fontFamily: "'Baloo 2', sans-serif",
+        fontSize: '40px',
+        fontStyle: '800',
+        color: '#fff8e7',
+        stroke: '#16213f',
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setAlpha(0);
+
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
     this.events.once('shutdown', () => {
@@ -63,6 +77,10 @@ export class GameScene extends Phaser.Scene {
     drawTerrain(this.terrainTexture, this.rt.terrain);
     drawScene(this.graphics, this.allWorms(), this.rt.projectiles, this.rt.match, this.rt.rope);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
+
+    const bannerAlpha = turnBannerAlpha(this.rt.turnBannerTimer ?? 0, TURN_BANNER_DURATION_MS);
+    this.turnBannerText.setAlpha(bannerAlpha);
+    if (bannerAlpha > 0) this.turnBannerText.setText(turnBannerLabel(currentWorm(this.rt.match).playerId));
 
     const result = checkWinner(this.rt.teams);
     if (result) this.scene.start('EndScene', { winner: result });

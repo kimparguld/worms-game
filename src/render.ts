@@ -224,3 +224,16 @@ export function updateHud(
       `Weapon: ${selectedWeapon}`,
   );
 }
+
+export function turnBannerLabel(playerId: string): string {
+  const num = playerId.replace(/[^0-9]/g, '');
+  return num ? `Player ${num} turn` : `${playerId} turn`;
+}
+
+export function turnBannerAlpha(timeRemainingMs: number, durationMs: number): number {
+  if (timeRemainingMs <= 0 || durationMs <= 0) return 0;
+  const fadeMs = Math.min(300, durationMs / 2);
+  const fadeInAlpha = (durationMs - timeRemainingMs) / fadeMs;
+  const fadeOutAlpha = timeRemainingMs / fadeMs;
+  return Math.max(0, Math.min(1, fadeInAlpha, fadeOutAlpha));
+}
