@@ -9,13 +9,16 @@ import {
   drawWater,
   turnBannerAlpha,
   turnBannerLabel,
+  weaponLabel,
   drawTeamHealthBars,
   teamHealthBarX,
   TEAM_BAR_WIDTH,
+  drawPanelGrain,
+  teamColorCss,
 } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
-import { TURN_BANNER_DURATION_MS } from '../constants.js';
+import { TURN_BANNER_DURATION_MS, WORLD_WIDTH, WORLD_HEIGHT, DEFAULT_WORM_NAMES } from '../constants.js';
 import { soundSystem } from '../sound.js';
 import { aimWormAtPoint, isMobileDevice } from '../mobile.js';
 import type { Worm, MatchRuntime } from '../types.js';
@@ -23,6 +26,7 @@ import type { Worm, MatchRuntime } from '../types.js';
 interface GameSceneData {
   team1Name?: string;
   team2Name?: string;
+  wormNames?: [string, string, string, string];
 }
 
 const MOBILE_WORM_DRAG_RADIUS = 96;
@@ -30,15 +34,19 @@ const MOBILE_MOVEMENT_ZONE_WIDTH_FRACTION = 0.35;
 const MOBILE_MOVEMENT_ZONE_MIN_Y_FRACTION = 0.45;
 const MOBILE_MOVE_DEAD_ZONE = 18;
 const MOBILE_JUMP_DRAG_DISTANCE = 42;
+const MOBILE_JUMP_PULSE_MS = 140;
 
 export class GameScene extends Phaser.Scene {
   private rt!: MatchRuntime;
   private team1Name = 'Team 1';
   private team2Name = 'Team 2';
+  private wormNames: [string, string, string, string] = DEFAULT_WORM_NAMES;
 
   private terrainTexture!: Phaser.Textures.CanvasTexture;
   private waterGraphics!: Phaser.GameObjects.Graphics;
   private graphics!: Phaser.GameObjects.Graphics;
+  private uiGraphics!: Phaser.GameObjects.Graphics;
+  private uiCamera!: Phaser.Cameras.Scene2D.Camera;
   private hudText!: Phaser.GameObjects.Text;
   private turnBannerText!: Phaser.GameObjects.Text;
 
@@ -47,7 +55,15 @@ export class GameScene extends Phaser.Scene {
   private splashEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private muzzleEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private dustEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private activeWormGlow!: Phaser.GameObjects.Image;
+  private activeWormArrow!: Phaser.GameObjects.Image;
+  // One label per worm, created once at match start (the roster is fixed -
+  // worms die, they're never added) and repositioned/hidden each frame in
+  // update() rather than recreated.
+  private wormNameTexts = new Map<Worm, Phaser.GameObjects.Text>();
+  // Per-turn: has the active worm received a movement key/drag yet? Reset
+  // whenever the active worm changes; drives when the turn arrow hides.
+  private turnMovementStarted = false;
+  private turnArrowWorm: Worm | null = null;
 
   // Identity-tracked (not value-tracked): an explosion/splash's `timer`
   // counts down every frame, so the only reliable "have I already fired a
@@ -64,10 +80,21 @@ export class GameScene extends Phaser.Scene {
   private firingPointerId: number | null = null;
   private movementStartX = 0;
   private movementStartY = 0;
+  private mobileControls: HTMLDivElement | null = null;
+  private mobileWeaponLabel: HTMLOutputElement | null = null;
   // Counts down in triggerMovementDust; only one worm can act per turn, so
   // a single shared cooldown (rather than one per worm) is enough to keep
   // footstep puffs from firing every single frame while walking.
   private dustCooldownMs = 0;
+
+  // Populated as each object is created in create(), then handed to the two
+  // cameras' .ignore() calls at the end of create(). Anything that draws at
+  // world coordinates (terrain, worms, particles...) belongs in
+  // worldObjects; anything that must stay full-size/screen-space (HUD,
+  // banner, health bars) belongs in uiObjects. A new effect added later and
+  // left off both arrays would render on *both* cameras, doubled up.
+  private worldObjects: Phaser.GameObjects.GameObject[] = [];
+  private uiObjects: Phaser.GameObjects.GameObject[] = [];
 
   constructor() {
     super('GameScene');
@@ -76,35 +103,53 @@ export class GameScene extends Phaser.Scene {
   init(data: GameSceneData): void {
     this.team1Name = data.team1Name ?? 'Team 1';
     this.team2Name = data.team2Name ?? 'Team 2';
+    this.wormNames = data.wormNames ?? DEFAULT_WORM_NAMES;
   }
 
   create(): void {
     resetInputState(sharedInput);
+    // Phaser reuses this Scene instance across restarts (StartScene ->
+    // GameScene -> EndScene -> StartScene -> GameScene...), so create() runs
+    // more than once over the scene's lifetime while these two arrays are
+    // plain class fields initialized only at construction. Without clearing
+    // them here, each rematch would push another batch of objects onto
+    // arrays still holding references to the previous match's now-destroyed
+    // objects - an unbounded leak, and a growing list for every .ignore() call.
+    this.worldObjects = [];
+    this.uiObjects = [];
     this.input.once('pointerdown', () => this.unlockAudio());
     this.input.once('pointerdown', () => this.enterMobileFullscreen());
+    this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.keyboard?.once('keydown', () => this.unlockAudio());
 
-    const { width, height } = this.scale;
-    this.rt = createMatchRuntime(width, height, this.team1Name, this.team2Name);
+    const { width, height } = this.scale; // viewport size - UI-space layout only
+    this.rt = createMatchRuntime(WORLD_WIDTH, WORLD_HEIGHT, this.team1Name, this.team2Name, this.wormNames);
 
     // Static sky/cloud backdrop, drawn once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.
     const sky = this.add.graphics();
-    drawSky(sky, width, height);
+    drawSky(sky, WORLD_WIDTH, WORLD_HEIGHT);
+    this.worldObjects.push(sky);
 
     // Sits behind the terrain layer (added next) so it's only visible where
     // terrain has been dug/blown away down to the water line; redrawn every
     // frame in update() so its surface highlight can animate.
     this.waterGraphics = this.add.graphics();
-    drawWater(this.waterGraphics, width, height, 0);
+    drawWater(this.waterGraphics, WORLD_WIDTH, WORLD_HEIGHT, 0);
+    this.worldObjects.push(this.waterGraphics);
 
     if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
     // Non-null: the line above always removes any colliding key first, so
     // createCanvas never actually returns null here.
-    this.terrainTexture = this.textures.createCanvas('terrainTex', width, height)!;
-    this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
+    this.terrainTexture = this.textures.createCanvas('terrainTex', WORLD_WIDTH, WORLD_HEIGHT)!;
+    const terrainImage = this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
+    this.worldObjects.push(terrainImage);
 
     this.graphics = this.add.graphics();
+    this.worldObjects.push(this.graphics);
+
+    this.uiGraphics = this.add.graphics();
+    this.uiObjects.push(this.uiGraphics);
 
     // The HUD panel sits top-centre, in the gap between the two team life
     // bars (which are anchored to the left and right edges by
@@ -116,8 +161,10 @@ export class GameScene extends Phaser.Scene {
     const hudPanel = this.add.graphics();
     hudPanel.fillStyle(0x16213f, 0.72);
     hudPanel.fillRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
+    drawPanelGrain(hudPanel, hudPanelX, 6, hudPanelWidth, hudPanelHeight, 907);
     hudPanel.lineStyle(2, 0xffffff, 0.15);
     hudPanel.strokeRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
+    this.uiObjects.push(hudPanel);
 
     this.hudText = this.add.text(hudPanelX + 14, 16, '', {
       fontFamily: "'Baloo 2', sans-serif",
@@ -125,6 +172,7 @@ export class GameScene extends Phaser.Scene {
       color: '#fff8e7',
       lineSpacing: 4,
     });
+    this.uiObjects.push(this.hudText);
 
     this.turnBannerText = this.add
       .text(width / 2, height / 2 - 40, '', {
@@ -137,9 +185,10 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setAlpha(0);
+    this.uiObjects.push(this.turnBannerText);
 
-    [0, 1].forEach((i) =>
-      this.add
+    [0, 1].forEach((i) => {
+      const teamNameText = this.add
         .text(teamHealthBarX(i, width) + TEAM_BAR_WIDTH / 2, 8, this.rt.teams[i].name, {
           fontFamily: "'Baloo 2', sans-serif",
           fontSize: '16px',
@@ -148,33 +197,101 @@ export class GameScene extends Phaser.Scene {
           stroke: '#16213f',
           strokeThickness: 3,
         })
-        .setOrigin(0.5, 0),
-    );
+        .setOrigin(0.5, 0);
+      this.uiObjects.push(teamNameText);
+    });
 
     this.createParticleEmitters();
+    this.worldObjects.push(
+      this.emberEmitter,
+      this.debrisEmitter,
+      this.splashEmitter,
+      this.muzzleEmitter,
+      this.dustEmitter,
+    );
 
-    // A soft gold halo behind the active-worm ring (drawn separately in
-    // render.ts) - a dedicated Image using its own radially-faded texture,
-    // not the Glow filter on the tiny particleDot sprite: at the scale this
-    // halo is displayed, Glow's fixed pixel-space distance swamped the 8x8
-    // texture and squared off into a visible rectangle instead of a halo.
-    if (!this.textures.exists('glowHalo')) {
-      const size = 64;
-      const halo = this.textures.createCanvas('glowHalo', size, size)!;
-      const gradient = halo.context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-      gradient.addColorStop(0, 'rgba(255,255,255,0.9)');
-      gradient.addColorStop(1, 'rgba(255,255,255,0)');
-      halo.context.fillStyle = gradient;
-      halo.context.fillRect(0, 0, size, size);
-      halo.refresh();
+    // A bouncing "it's your turn" arrow above the active worm's head - a
+    // dedicated Image using a procedurally-drawn signpost-arrow texture, in
+    // the same style as the game's other bold-outline shapes (dark stroke
+    // around a bright fill). Hidden the instant the player starts moving
+    // that worm (see updateActiveWormArrow), so it only ever marks "it's
+    // your turn and you haven't acted yet", not the active worm generally.
+    if (!this.textures.exists('turnArrow')) {
+      const w = 26;
+      const h = 30;
+      const arrow = this.textures.createCanvas('turnArrow', w, h)!;
+      const ctx = arrow.context;
+      ctx.fillStyle = '#ffd966';
+      ctx.strokeStyle = '#8a5a1e';
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(w / 2 - 4, 2);
+      ctx.lineTo(w / 2 + 4, 2);
+      ctx.lineTo(w / 2 + 4, h * 0.45);
+      ctx.lineTo(w / 2 + 11, h * 0.45);
+      ctx.lineTo(w / 2, h - 2);
+      ctx.lineTo(w / 2 - 11, h * 0.45);
+      ctx.lineTo(w / 2 - 4, h * 0.45);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      arrow.refresh();
     }
-    this.activeWormGlow = this.add.image(0, 0, 'glowHalo').setTint(0xffd966).setBlendMode(Phaser.BlendModes.ADD);
+    // Origin (0.5, 1): position sets the arrow's tip, so it's trivial to
+    // pin just above a worm's head regardless of the texture's own height.
+    this.activeWormArrow = this.add.image(0, 0, 'turnArrow').setOrigin(0.5, 1);
+    this.worldObjects.push(this.activeWormArrow);
+
+    for (const team of this.rt.teams) {
+      for (const worm of team.worms) {
+        const nameText = this.add
+          .text(0, 0, worm.name, {
+            fontFamily: "'Baloo 2', sans-serif",
+            fontSize: '11px',
+            fontStyle: '700',
+            color: teamColorCss(team.playerId),
+            stroke: '#16213f',
+            strokeThickness: 3,
+          })
+          .setOrigin(0.5, 1);
+        this.wormNameTexts.set(worm, nameText);
+        this.worldObjects.push(nameText);
+      }
+    }
 
     this.createMobileTouchControls();
+    this.createMobileControlOverlay();
 
     // A faint darkened edge to frame the arena, not a heavy vignette - it
     // should read as depth, not as a filter someone forgot to remove.
     this.cameras.main.filters.internal.addVignette(0.5, 0.5, 1.0, 0.25);
+
+    // UI camera: screen-space, zoom 1, renders only the HUD/banner/team-name/
+    // health-bar layer built up in uiObjects above. The main camera is
+    // zoomed out to show the whole (larger) world and must not also render
+    // - and shrink - these.
+    this.uiCamera = this.cameras.add(0, 0, width, height);
+    this.uiCamera.setScroll(0, 0);
+    this.cameras.main.ignore(this.uiObjects);
+    this.uiCamera.ignore(this.worldObjects);
+
+    // Zoom the main camera out just enough that the whole (larger) world
+    // fits the viewport - world and viewport share a 16:9 ratio, so one
+    // zoom factor covers both axes exactly. That alone doesn't center the
+    // world, though: Phaser zooms a camera about its own midpoint, not the
+    // world origin, so with scroll left at (0, 0) the extra world revealed
+    // by zooming out past 1 would land off both the right and bottom edges
+    // of the viewport instead of being split evenly around it.
+    this.cameras.main.setZoom(width / WORLD_WIDTH);
+    // Phaser zooms a camera about its own midpoint, not the world origin, so
+    // scroll must be offset by half the extra world size on each axis to
+    // center the (larger) world in the viewport - not (0,0), which would
+    // leave the world's right/bottom edges (and the whole water band) off
+    // screen. This scroll is set once here and never touched again, so the
+    // "no scrolling/follow" constraint still holds - only the fixed offset
+    // changes from the original (0,0).
+    this.cameras.main.setScroll((WORLD_WIDTH - width) / 2, (WORLD_HEIGHT - height) / 2);
 
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
@@ -187,7 +304,6 @@ export class GameScene extends Phaser.Scene {
   private createMobileTouchControls(): void {
     if (!isMobileDevice()) return;
     this.input.addPointer(2);
-    this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.on('pointermove', this.handlePointerMove, this);
     this.input.on('pointerup', this.handlePointerUp, this);
     this.input.on('pointerupoutside', this.handlePointerUp, this);
@@ -195,8 +311,11 @@ export class GameScene extends Phaser.Scene {
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {
     if (this.rt.turnBannerTimer !== null) return;
+    const worldPoint = this.pointerWorldPoint(pointer);
+    if (!isMobileDevice()) return;
+
     const worm = currentWorm(this.rt.match).worm;
-    if (this.isMovementPointer(pointer, worm) && this.movementPointerId === null) {
+    if (this.isMovementPointer(pointer, worldPoint, worm) && this.movementPointerId === null) {
       this.movementPointerId = pointer.pointerId;
       this.movementStartX = pointer.x;
       this.movementStartY = pointer.y;
@@ -206,9 +325,60 @@ export class GameScene extends Phaser.Scene {
 
     if (this.firingPointerId !== null) return;
     this.firingPointerId = pointer.pointerId;
-    sharedInput.selectedWeapon = 1;
     sharedInput.firing = true;
-    aimWormAtPoint(worm, pointer.x, pointer.y);
+    aimWormAtPoint(worm, worldPoint.x, worldPoint.y);
+  }
+
+  private createMobileControlOverlay(): void {
+    if (!isMobileDevice()) return;
+    const container = document.getElementById('game-container');
+    if (!container) return;
+
+    const controls = document.createElement('div');
+    controls.className = 'mobile-game-controls';
+    controls.innerHTML = `
+      <button type="button" data-action="previous" aria-label="Previous weapon">Prev</button>
+      <output aria-live="polite"></output>
+      <button type="button" data-action="next" aria-label="Next weapon">Next</button>
+      <button type="button" data-action="jump" aria-label="Jump">Jump</button>
+      <button type="button" class="mobile-end-turn" data-action="end" aria-label="End turn">End</button>
+    `;
+
+    controls.addEventListener('pointerdown', (event) => event.stopPropagation());
+    controls.addEventListener('pointerup', (event) => event.stopPropagation());
+    controls.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const action = (event.target as HTMLElement).dataset.action;
+      if (action === 'previous') this.selectMobileWeapon(-1);
+      if (action === 'next') this.selectMobileWeapon(1);
+      if (action === 'end') sharedInput.endTurnRequested = true;
+    });
+
+    const jumpButton = controls.querySelector<HTMLButtonElement>('[data-action="jump"]');
+    jumpButton?.addEventListener('pointerdown', () => this.triggerMobileJump());
+
+    this.mobileControls = controls;
+    this.mobileWeaponLabel = controls.querySelector('output');
+    this.updateMobileWeaponLabel();
+    container.appendChild(controls);
+  }
+
+  private selectMobileWeapon(delta: number): void {
+    const maxWeapon = WEAPON_KEYS.length;
+    sharedInput.selectedWeapon = ((sharedInput.selectedWeapon - 1 + delta + maxWeapon) % maxWeapon) + 1;
+    this.updateMobileWeaponLabel();
+  }
+
+  private updateMobileWeaponLabel(): void {
+    if (!this.mobileWeaponLabel) return;
+    this.mobileWeaponLabel.value = `${sharedInput.selectedWeapon}. ${weaponLabel(sharedInput.selectedWeapon)}`;
+  }
+
+  private triggerMobileJump(): void {
+    sharedInput.jump = true;
+    this.time.delayedCall(MOBILE_JUMP_PULSE_MS, () => {
+      sharedInput.jump = false;
+    });
   }
 
   private handlePointerMove(pointer: Phaser.Input.Pointer): void {
@@ -218,7 +388,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (pointer.pointerId !== this.firingPointerId) return;
-    aimWormAtPoint(currentWorm(this.rt.match).worm, pointer.x, pointer.y);
+    const worldPoint = this.pointerWorldPoint(pointer);
+    aimWormAtPoint(currentWorm(this.rt.match).worm, worldPoint.x, worldPoint.y);
   }
 
   private handlePointerUp(pointer: Phaser.Input.Pointer): void {
@@ -243,12 +414,16 @@ export class GameScene extends Phaser.Scene {
     sharedInput.jump = deltaY < -MOBILE_JUMP_DRAG_DISTANCE;
   }
 
-  private isMovementPointer(pointer: Phaser.Input.Pointer, worm: Worm): boolean {
-    const nearActiveWorm = Math.hypot(pointer.x - worm.x, pointer.y - worm.y) <= MOBILE_WORM_DRAG_RADIUS;
+  private isMovementPointer(pointer: Phaser.Input.Pointer, worldPoint: Phaser.Math.Vector2, worm: Worm): boolean {
+    const nearActiveWorm = Math.hypot(worldPoint.x - worm.x, worldPoint.y - worm.y) <= MOBILE_WORM_DRAG_RADIUS;
     const inMovementZone =
       pointer.x <= this.scale.width * MOBILE_MOVEMENT_ZONE_WIDTH_FRACTION &&
       pointer.y >= this.scale.height * MOBILE_MOVEMENT_ZONE_MIN_Y_FRACTION;
     return nearActiveWorm || inMovementZone;
+  }
+
+  private pointerWorldPoint(pointer: Phaser.Input.Pointer): Phaser.Math.Vector2 {
+    return pointer.positionToCamera(this.cameras.main, new Phaser.Math.Vector2()) as Phaser.Math.Vector2;
   }
 
   private clearMobileTouchState(): void {
@@ -258,6 +433,9 @@ export class GameScene extends Phaser.Scene {
     sharedInput.right = false;
     sharedInput.jump = false;
     sharedInput.firing = false;
+    this.mobileControls?.remove();
+    this.mobileControls = null;
+    this.mobileWeaponLabel = null;
   }
 
   private enterMobileFullscreen(): void {
@@ -380,7 +558,7 @@ export class GameScene extends Phaser.Scene {
     if (this.rt.charging && !this.wasCharging) soundSystem.play('charge');
     this.wasCharging = this.rt.charging;
 
-    drawWater(this.waterGraphics, this.scale.width, this.scale.height, time);
+    drawWater(this.waterGraphics, WORLD_WIDTH, WORLD_HEIGHT, time);
     drawTerrain(this.terrainTexture, this.rt.terrain);
     drawScene(
       this.graphics,
@@ -396,12 +574,15 @@ export class GameScene extends Phaser.Scene {
       time,
       this.rt.explosions,
       this.rt.splashes,
+      this.rt.terrain,
     );
-    drawTeamHealthBars(this.graphics, this.rt.teams, this.scale.width);
+    drawTeamHealthBars(this.uiGraphics, this.rt.teams, this.scale.width);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
+    this.updateMobileWeaponLabel();
     this.triggerEffectBursts();
     this.triggerMovementDust(delta);
-    this.updateActiveWormGlow(time);
+    this.updateActiveWormArrow(time);
+    this.updateWormNameTexts();
 
     const bannerAlpha = turnBannerAlpha(this.rt.turnBannerTimer ?? 0, TURN_BANNER_DURATION_MS);
     this.turnBannerText.setAlpha(bannerAlpha);
@@ -416,24 +597,44 @@ export class GameScene extends Phaser.Scene {
     this.bannerWasVisible = bannerAlpha > 0;
 
     const result = checkWinner(this.rt.teams);
-    if (result) this.scene.start('EndScene', { winner: result });
+    if (result) {
+      const winnerName = this.rt.teams.find((team) => team.playerId === result)?.name;
+      this.scene.start('EndScene', { winner: result, winnerName });
+    }
   }
 
-  // Slow pulse (not a static glow) so the turn indicator keeps drawing the
-  // eye without competing with brighter one-shot effects like explosions.
-  // Hidden while the active worm is dead/dying - there's no "your turn" to
-  // highlight once it can no longer act.
-  private updateActiveWormGlow(timeMs: number): void {
+  // Hidden once the active worm has received any movement input this turn
+  // (tracked via turnMovementStarted, reset below when the active worm
+  // changes) - the arrow marks "it's your turn, you haven't moved yet", not
+  // the active worm generally, so it shouldn't linger once you've started.
+  // Also hidden while the active worm is dead/dying - there's no "your
+  // turn" left to highlight once it can no longer act.
+  private updateActiveWormArrow(timeMs: number): void {
     const active = currentWorm(this.rt.match);
-    if (!active.worm.alive || active.worm.dying) {
-      this.activeWormGlow.setVisible(false);
+    if (active.worm !== this.turnArrowWorm) {
+      this.turnArrowWorm = active.worm;
+      this.turnMovementStarted = false;
+    }
+    if (sharedInput.left || sharedInput.right) this.turnMovementStarted = true;
+
+    if (!active.worm.alive || active.worm.dying || this.turnMovementStarted) {
+      this.activeWormArrow.setVisible(false);
       return;
     }
-    this.activeWormGlow.setVisible(true);
-    this.activeWormGlow.setPosition(active.worm.x, active.worm.y - 1);
-    const pulse = 0.75 + Math.sin(timeMs / 260) * 0.25;
-    this.activeWormGlow.setScale(0.45 + pulse * 0.1);
-    this.activeWormGlow.setAlpha(0.35 + pulse * 0.25);
+    this.activeWormArrow.setVisible(true);
+    const bounce = Math.sin(timeMs / 220) * 4;
+    this.activeWormArrow.setPosition(active.worm.x, active.worm.y - 46 + bounce);
+  }
+
+  private updateWormNameTexts(): void {
+    for (const [worm, text] of this.wormNameTexts) {
+      if (!worm.alive || worm.dying) {
+        text.setVisible(false);
+        continue;
+      }
+      text.setVisible(true);
+      text.setPosition(worm.x, worm.y - 31);
+    }
   }
 
   private allWorms(): Worm[] {

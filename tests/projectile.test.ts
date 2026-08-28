@@ -16,7 +16,7 @@ function flatTerrain(width: number, height: number, groundY: number): Terrain {
 describe('createProjectile', () => {
   it('scales speed with charge power for a chargeable weapon', () => {
     const p = createProjectile('bazooka', 0, 0, 0, 0.5);
-    expect(p.vx).toBeCloseTo(200 + (850 - 200) * 0.5);
+    expect(p.vx).toBeCloseTo(250 + (1100 - 250) * 0.5);
     expect(p.alive).toBe(true);
   });
 });
@@ -47,6 +47,29 @@ describe('updateProjectile', () => {
     }
     expect(result!.exploded).toBe(true);
     expect(worm.hp).toBeLessThan(100);
+  });
+
+  it('explodes when a fast bazooka crosses a worm within one frame', () => {
+    const terrain = flatTerrain(2_000, 400, 390);
+    const worm = createWorm(50, 50, 'p2', 'Bob');
+    const projectile = createProjectile('bazooka', 0, 50, 0, 1);
+
+    const result = updateProjectile(projectile, terrain, [worm], 0, 0.1);
+
+    expect(result.exploded).toBe(true);
+    expect(worm.hp).toBeLessThan(100);
+  });
+
+  it('explodes when a fast bazooka crosses thin terrain within one frame', () => {
+    const terrain = flatTerrain(2_000, 400, 390);
+    terrain.mask[54 * terrain.width + 50] = 1;
+    const projectile = createProjectile('bazooka', 0, 50, 0, 1);
+
+    const result = updateProjectile(projectile, terrain, [], 0, 0.1);
+
+    expect(result.exploded).toBe(true);
+    expect(projectile.x).toBeGreaterThan(40);
+    expect(projectile.x).toBeLessThan(60);
   });
 
   it('does not self-detonate on the worm that fired it', () => {

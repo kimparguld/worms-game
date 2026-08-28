@@ -28,9 +28,28 @@ describe('fireRope', () => {
     const result = fireRope(50, 50, -Math.PI / 2, terrain, 30);
     expect(result.attached).toBe(false);
   });
+
+  it('does not attach at zero length when the worm starts inside terrain', () => {
+    const terrain = ceilingTerrain(100, 100, 50);
+    const result = fireRope(50, 50, -Math.PI / 2, terrain, 30);
+
+    expect(result.attached).toBe(false);
+  });
 });
 
 describe('updateRopeSwing', () => {
+  it('leaves the worm in a valid position when a rope is attached at zero length', () => {
+    const terrain = createTerrain(100, 100);
+    terrain.mask.fill(0);
+    const worm = createWorm(50, 50, 'p1', 'Alice');
+    const rope: Rope = { attached: true, anchorX: 50, anchorY: 50, length: 0 };
+
+    updateRopeSwing(worm, rope, 1 / 60, terrain);
+
+    expect(Number.isFinite(worm.x)).toBe(true);
+    expect(Number.isFinite(worm.y)).toBe(true);
+  });
+
   it('keeps the worm at a fixed distance from the anchor while swinging', () => {
     const terrain = createTerrain(200, 200);
     terrain.mask.fill(0); // open air - nothing for the swing to collide with

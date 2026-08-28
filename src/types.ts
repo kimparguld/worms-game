@@ -2,6 +2,12 @@ export interface Terrain {
   width: number;
   height: number;
   mask: Uint8Array;
+  // Set whenever the mask is mutated (carveCircle); drawTerrain consumes it
+  // to skip its full per-pixel repaint on the vast majority of frames where
+  // the shape hasn't changed since the last draw. Optional so tests that
+  // build a Terrain literal without it still work - drawTerrain treats a
+  // missing flag as dirty.
+  dirty?: boolean;
 }
 
 export interface Worm {
@@ -57,7 +63,17 @@ export interface InputState {
   selectedWeapon: number;
 }
 
-export type WeaponKey = 'bazooka' | 'grenade' | 'shotgun' | 'ninjaRope' | 'dynamite';
+export type WeaponKey =
+  | 'bazooka'
+  | 'grenade'
+  | 'shotgun'
+  | 'ninjaRope'
+  | 'dynamite'
+  | 'sniperRifle'
+  | 'airstrikeRocket'
+  | 'holyHandGrenade'
+  | 'mine'
+  | 'drill';
 
 export interface WeaponDef {
   key: WeaponKey;
@@ -73,6 +89,9 @@ export interface WeaponDef {
   hitscan: boolean;
   pellets: number;
   bounces: boolean;
+  rope: boolean;
+  airstrike: boolean;
+  drill: boolean;
   range?: number;
 }
 

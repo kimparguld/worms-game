@@ -10,6 +10,7 @@ import {
 } from './constants.js';
 import { WEAPON_KEYS } from './matchLoop.js';
 import { WEAPONS } from './weapons.js';
+import { findSurfaceY } from './terrain.js';
 import type {
   Terrain,
   Worm,
@@ -33,10 +34,15 @@ let cachedHeight = 0;
 const BUILDING_ROOF_DEPTH = 6;
 
 const TERRAIN_HASH_UNIT = 255;
-const GRASS_RIM_DEPTH = 2;
-const GRASS_BODY_DEPTH = 8;
+const GRASS_RIM_DEPTH = 3;
+const GRASS_BODY_DEPTH = 12;
 const TOPSOIL_DEPTH = 38;
 const CLAY_DEPTH = 85;
+// Cell size for the rounded pebble/blob mottling below - bigger than the
+// 1px fine speckle, so dirt/clay/rock read as a cluster of chunky rounded
+// blotches (the Worms art style this project is chasing) rather than only
+// fine grain.
+const BLOB_CELL = 9;
 const SURFACE_TUFT_MAX_HEIGHT = 4;
 const SHORELINE_FOAM_RANGE = 9;
 const SHORELINE_FOAM_SPARSITY = 92;
@@ -99,9 +105,25 @@ function applyMaterialLighting(base: ColorRgba, input: TerrainMaterialColorInput
     const light = (normalX / normalLength) * SUN_DIRECTION_X + (normalY / normalLength) * SUN_DIRECTION_Y;
     lit = adjustColor(lit, light * 34 * roughness);
   }
-  if (input.hasEmptyLeft || input.hasEmptyRight || input.hasEmptyBelow) lit = adjustColor(lit, -18 * roughness);
+  if (input.hasEmptyLeft || input.hasEmptyRight || input.hasEmptyBelow) lit = adjustColor(lit, -30 * roughness);
   if (input.hasEmptyAbove) lit = mixColor(lit, color(255, 246, 208), 0.14 * roughness);
   return lit;
+}
+
+// Rounded "pebble" mottling: a coarse cellular blob per grid cell, laid over
+// the fine per-pixel speckle so dirt/clay/rock read as chunky rounded
+// blotches instead of only single-pixel grain.
+function blobMottleStrength(x: number, y: number, seed: number): { strength: number; lighter: boolean } | null {
+  const cellX = Math.floor(x / BLOB_CELL);
+  const cellY = Math.floor(y / BLOB_CELL);
+  const hash = terrainPixelHash(cellX, cellY, seed);
+  if (hash < 70) return null; // most cells carry no blob at all
+  const centerX = cellX * BLOB_CELL + (hash % BLOB_CELL);
+  const centerY = cellY * BLOB_CELL + ((hash >> 3) % BLOB_CELL);
+  const radius = 3 + (hash % 4);
+  const dist2 = (x - centerX) ** 2 + (y - centerY) ** 2;
+  if (dist2 > radius * radius) return null;
+  return { strength: 1 - dist2 / (radius * radius), lighter: hash % 2 === 0 };
 }
 
 export function terrainPixelHash(x: number, y: number, seed: number): number {
@@ -116,7 +138,7 @@ function earthBaseColor(depth: number): ColorRgba {
   if (depth <= GRASS_BODY_DEPTH) return color(72, 151, 62);
   if (depth <= TOPSOIL_DEPTH) return color(112, 78, 47);
   if (depth <= CLAY_DEPTH) return color(139, 91, 57);
-  return color(79, 72, 67);
+  return color(97, 64, 42);
 }
 
 function earthMaterialColor(input: TerrainMaterialColorInput): ColorRgba {
@@ -144,11 +166,30 @@ function earthMaterialColor(input: TerrainMaterialColorInput): ColorRgba {
     if (speckle > 232) base = mixColor(base, color(188, 126, 75), 0.45);
   } else {
     base = adjustColor(base, fineNoise * 13 + strata * 8);
-    if (speckle > 228) base = mixColor(base, color(132, 125, 116), 0.42);
+    if (speckle > 228) base = mixColor(base, color(150, 101, 65), 0.42);
   }
 
-  if (stone) base = mixColor(base, color(128, 124, 116), 0.75);
+  if (stone) base = mixColor(base, color(158, 118, 82), 0.75);
   if (depth === TOPSOIL_DEPTH || depth === CLAY_DEPTH) base = mixColor(base, color(54, 44, 37), 0.28);
+
+  // Chunky rounded blotches under the grass, layered on top of the fine
+  // strata/speckle above - this is what gives dirt/clay/rock the "pebbly"
+  // look instead of a smooth graded fill.
+  if (depth > GRASS_BODY_DEPTH) {
+    const blob = blobMottleStrength(x, y, Math.floor(depth / 10));
+    if (blob) {
+      const tint = blob.lighter ? adjustColor(base, 26) : adjustColor(base, -24);
+      base = mixColor(base, tint, 0.4 * blob.strength);
+    }
+  }
+
+  // A crisp dark cartoon outline at the very edge of the mass, on top of
+  // applyMaterialLighting's softer per-side shading - this is what gives
+  // the terrain its bold, hand-inked silhouette instead of a shaded but
+  // edgeless blob.
+  if (depth <= 1 && (input.hasEmptyLeft || input.hasEmptyRight || input.hasEmptyAbove || input.hasEmptyBelow)) {
+    base = mixColor(base, color(26, 19, 13), 0.32);
+  }
 
   return applyMaterialLighting(base, input, 1);
 }
@@ -284,16 +325,33 @@ function windowIsLit(cellX: number, cellY: number, seed: number): boolean {
   return h % 3 !== 0;
 }
 
+// Deterministic per-pixel darken/lighten so grass/dirt/rock read as a
+// mottled texture instead of a flat color fill - same cheap position-hash
+// technique as windowIsLit, so a redraw (e.g. after an explosion) never
+// flickers.
+export function terrainSpeckle(x: number, y: number): number {
+  let h = (x * 374761393) ^ (y * 668265263);
+  h = (h ^ (h >>> 13)) * 1274126177;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h % 21) - 10; // -10..+10
+}
+
 export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Terrain): void {
   const { width, height } = terrain;
-  if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
+  const sizeChanged = !cachedImageData || cachedWidth !== width || cachedHeight !== height;
+  // The terrain only actually changes shape when something carves it
+  // (explosion/dig); every other frame the last-painted texture is still
+  // correct, so skip the ~width*height repaint below entirely instead of
+  // redoing it 60 times a second for a static picture.
+  if (terrain.dirty === false && !sizeChanged) return;
+  if (sizeChanged) {
     cachedImageData = texture.context.createImageData(width, height);
     cachedRunLength = new Int32Array(width);
     cachedBuildingRunLength = new Int32Array(width);
     cachedWidth = width;
     cachedHeight = height;
   }
-  const imageData = cachedImageData;
+  const imageData = cachedImageData!;
   const runLength = cachedRunLength!;
   const buildingRunLength = cachedBuildingRunLength!;
   runLength.fill(0);
@@ -306,6 +364,7 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
 
   for (let i = 0; i < terrain.mask.length; i++) {
     const x = i % width;
+    const y = (i / width) | 0;
     const o = i * 4;
     const cell = terrain.mask[i];
     if (cell === 2) {
@@ -333,7 +392,7 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       const materialColor = terrainMaterialColor({
         material: 2,
         x,
-        y: Math.floor(i / width),
+        y,
         depth,
         rowRunStartX,
         atLeftEdge,
@@ -359,7 +418,7 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       const materialColor = terrainMaterialColor({
         material: 1,
         x,
-        y: Math.floor(i / width),
+        y,
         depth,
         hasEmptyLeft: x > 0 && terrain.mask[i - 1] === 0,
         hasEmptyRight: x + 1 < width && terrain.mask[i + 1] === 0,
@@ -381,6 +440,7 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
   drawShorelineFoam(imageData, terrain);
   texture.context.putImageData(imageData, 0, 0);
   texture.refresh();
+  terrain.dirty = false;
 }
 
 // Drawn once (not per frame) - the sky doesn't change during a match.
@@ -487,6 +547,22 @@ export function drawSky(graphics: Phaser.GameObjects.Graphics, width: number, he
     graphics.fillStyle(0xfff8e7, 0.55);
     graphics.fillEllipse(cx - 12 * scale, cy - 5 * scale, 36 * scale, 12 * scale);
   }
+
+  // Fine painterly grain over the whole sky, so its gradient bands read as
+  // a painted backdrop rather than a flat digital fill - affordable at this
+  // density because the sky is drawn once and never redrawn during a match.
+  const grainCell = 8;
+  for (let gy = 0; gy * grainCell < height; gy++) {
+    for (let gx = 0; gx * grainCell < width; gx++) {
+      const hash = terrainPixelHash(gx, gy, 401);
+      if (hash < 226) continue;
+      const px = gx * grainCell + (hash % grainCell);
+      const py = gy * grainCell + ((hash >> 3) % grainCell);
+      const light = hash % 2 === 0;
+      graphics.fillStyle(light ? 0xffffff : 0x1c2a33, light ? 0.05 : 0.035);
+      graphics.fillRect(px, py, 1.4, 1.4);
+    }
+  }
 }
 
 // Sits behind the terrain layer in the display list, so it's only ever
@@ -538,6 +614,21 @@ export function drawWater(graphics: Phaser.GameObjects.Graphics, width: number, 
   drawWave(22, 0.031, 0.9, 1.7, 0xffffff, 0.13, 1);
   drawWave(band * 0.45, 0.026, 1.3, 3.2, 0x75c6e8, 0.2, 1.5);
   drawWave(band * 0.72, 0.022, -1.0, 2.5, 0x0a3158, 0.22, 2);
+
+  // Sun-glint sparkles: a sparse deterministic set of points near the
+  // surface that flicker in and out, so the water reads as a reflective
+  // rippled texture instead of a flat gradient. Fixed column stride (not a
+  // full per-pixel scan) keeps this cheap enough to redraw every frame.
+  const glintStride = 26;
+  for (let x = 0; x < width; x += glintStride) {
+    const hash = terrainPixelHash(x, 0, 613);
+    if (hash < 165) continue;
+    const glintY = level + band * (0.06 + ((hash % 40) / 40) * 0.3);
+    const flicker = Math.max(0, Math.sin(t * 2.6 + hash));
+    if (flicker <= 0) continue;
+    graphics.fillStyle(0xffffff, 0.55 * flicker);
+    graphics.fillCircle(x + ((t * 14) % glintStride), glintY, 1.2);
+  }
 }
 
 // Bold, saturated palette. Form reads through flat color + soft shading
@@ -545,6 +636,14 @@ export function drawWater(graphics: Phaser.GameObjects.Graphics, width: number, 
 // outlines - a thin, low-alpha line is used only where two similarly-toned
 // shapes would otherwise merge (eyes against the head).
 const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
+
+// CSS-hex form of TEAM_COLORS, for the DOM/Phaser.Text styling APIs that
+// take a string instead of the numeric fill color Graphics calls use.
+export function teamColorCss(playerId: string): string {
+  const teamColor = TEAM_COLORS[playerId] ?? 0xdddddd;
+  return `#${teamColor.toString(16).padStart(6, '0')}`;
+}
+
 const BODY_COLOR = 0xd99578;
 const BODY_SHADE_COLOR = 0x8f4e3f;
 const BODY_HIGHLIGHT_COLOR = 0xf7c7ad;
@@ -561,12 +660,37 @@ const CRAWL_AMPLITUDE = 3; // px of vertical travel per segment at full speed
 const IDLE_HZ = 0.6; // slow shared "breathing" bob while stationary
 const IDLE_BOB_AMPLITUDE = 1;
 
+// Stable integer hash of a worm's name, shared by wormPhaseSeed (idle bob
+// timing) and wormFreckleSpots (skin texture) so each worm gets one
+// consistent identity seed instead of two separate hashing schemes.
+function wormNameHash(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h;
+}
+
 // Deterministic per-worm phase offset (hashed from its name) so idle worms
 // don't all bob in perfect unison.
 function wormPhaseSeed(name: string): number {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return ((h % 1000) / 1000) * Math.PI * 2;
+  return ((wormNameHash(name) % 1000) / 1000) * Math.PI * 2;
+}
+
+// Deterministic freckle/scale-texture spots on a worm's head, hashed from
+// its name so the pattern is stable across frames (and between the live
+// worm and its death-wiggle animation, which redraws the same worm) without
+// needing extra state on the Worm type. Position is expressed relative to
+// the head center, before the facing flip drawWorm applies.
+export function wormFreckleSpots(name: string): Array<{ dx: number; dy: number; r: number }> {
+  const seed = wormNameHash(name);
+  const spots: Array<{ dx: number; dy: number; r: number }> = [];
+  for (let i = 0; i < 6; i++) {
+    const hash = terrainPixelHash(i, 7, seed);
+    if (hash < 70) continue; // most worms show 3-5 freckles
+    const angle = (hash / TERRAIN_HASH_UNIT) * Math.PI * 2;
+    const radius = 3 + (hash % 6);
+    spots.push({ dx: Math.cos(angle) * radius, dy: Math.sin(angle) * radius * 0.6 - 1, r: 1.2 + (hash % 3) * 0.4 });
+  }
+  return spots;
 }
 
 // Vertical bob for one point along the body (0 = head, 1..3 = tail segments,
@@ -698,7 +822,85 @@ function drawHeldWeapon(
     const hookY = handY + Math.sin(Math.PI * 1.3) * 6;
     graphics.fillStyle(0x9a9aa2, 1);
     graphics.fillCircle(hookX, hookY, 2.2);
+  } else if (weaponKey === 'sniperRifle') {
+    // A long, thin barrel - visually distinct from the bazooka's thicker
+    // tube at a glance.
+    const length = 26;
+    const endX = handX + Math.cos(fireAngle) * length;
+    const endY = handY + Math.sin(fireAngle) * length;
+    graphics.lineStyle(3.5, 0x2e2e38, 1);
+    graphics.lineBetween(handX, handY, endX, endY);
+    graphics.fillStyle(0x1c1c22, 1);
+    graphics.fillRect(handX + Math.cos(fireAngle) * 10 - 2, handY + Math.sin(fireAngle) * 10 - 5, 4, 4);
+  } else if (weaponKey === 'airstrikeRocket') {
+    // A sleeker, finned rocket in icy blue - reads as "air support" rather
+    // than the bazooka's infantry rocket.
+    const length = 22;
+    const endX = handX + Math.cos(fireAngle) * length;
+    const endY = handY + Math.sin(fireAngle) * length;
+    graphics.lineStyle(5, 0x4fc3f7, 1);
+    graphics.lineBetween(handX, handY, endX, endY);
+    graphics.fillStyle(0x1c8fc7, 1);
+    graphics.fillTriangle(
+      endX,
+      endY,
+      endX - Math.cos(fireAngle) * 6 - 4,
+      endY - Math.sin(fireAngle) * 6,
+      endX - Math.cos(fireAngle) * 6 + 4,
+      endY - Math.sin(fireAngle) * 6,
+    );
+  } else if (weaponKey === 'holyHandGrenade') {
+    // A grenade with a gold cross instead of a pull-pin ring - reads as a
+    // "blessed" upgrade of the regular grenade at a glance.
+    graphics.fillStyle(0xffd700, 1);
+    graphics.fillCircle(handX, handY, 7);
+    graphics.lineStyle(1, 0xb8860b, 0.7);
+    graphics.strokeCircle(handX, handY, 7);
+    graphics.fillStyle(0xfff4c2, 0.4);
+    graphics.fillCircle(handX - 2, handY - 2, 2.2);
+    graphics.lineStyle(2, 0xfff4c2, 1);
+    graphics.lineBetween(handX, handY - 11, handX, handY - 3);
+    graphics.lineBetween(handX - 3, handY - 7, handX + 3, handY - 7);
+  } else if (weaponKey === 'mine') {
+    // A dark, spiked sphere - reads as a naval-style mine, not another
+    // grenade, even though both are round.
+    graphics.fillStyle(0x37474f, 1);
+    graphics.fillCircle(handX, handY, 6.5);
+    for (const angle of [0, 60, 120, 180, 240, 300]) {
+      const rad = (angle * Math.PI) / 180;
+      graphics.lineStyle(1.6, 0x1c262b, 1);
+      graphics.lineBetween(
+        handX + Math.cos(rad) * 6.5,
+        handY + Math.sin(rad) * 6.5,
+        handX + Math.cos(rad) * 10,
+        handY + Math.sin(rad) * 10,
+      );
+    }
+  } else if (weaponKey === 'drill') {
+    graphics.save();
+    graphics.translateCanvas(handX, handY);
+    graphics.rotateCanvas(fireAngle);
+    graphics.fillStyle(0x2f3338, 1);
+    graphics.fillRoundedRect(-8, -5, 12, 10, 3);
+    graphics.fillStyle(0xd8dde3, 1);
+    graphics.fillTriangle(4, -5, 17, 0, 4, 5);
+    graphics.lineStyle(1.2, 0x808891, 0.9);
+    graphics.lineBetween(6, -3, 14, 1.5);
+    graphics.lineBetween(6, 3, 14, -1.5);
+    graphics.fillStyle(0xffd966, 1);
+    graphics.fillCircle(-5, 0, 2.2);
+    graphics.restore();
   }
+}
+
+// The Y the worm's ground shadow should be drawn at: the terrain surface
+// under it, not the worm's own y - the worm's y rises while airborne (e.g.
+// mid-jump), and a shadow that followed it up would defeat the point of a
+// ground shadow. Scans downward starting at the worm's own y, not the world
+// top, so a worm standing in a dug-out tunnel gets its tunnel floor, not
+// whatever solid roof/building sits higher up that same column.
+export function wormShadowY(worm: Worm, terrain: Terrain): number {
+  return findSurfaceY(terrain, worm.x, worm.y);
 }
 
 function drawWorm(
@@ -706,21 +908,23 @@ function drawWorm(
   worm: Worm,
   isActive: boolean,
   timeMs: number,
+  terrain: Terrain,
   heldWeapon?: WeaponKey,
 ): void {
   const teamColor = TEAM_COLORS[worm.team] ?? 0xdddddd;
   const facing = worm.facing;
   const head = headPosition(worm, timeMs);
   const hand = handPosition(worm, timeMs);
+  const shadowY = wormShadowY(worm, terrain);
 
   // Soft ground shadow spanning the whole crawling body
   graphics.fillStyle(0x000000, 0.24);
-  graphics.fillEllipse(worm.x - facing * 6, worm.y + 14, 42, 8);
+  graphics.fillEllipse(worm.x - facing * 6, shadowY + 14, 42, 8);
   graphics.fillStyle(0x4c2e22, 0.08);
-  graphics.fillEllipse(worm.x - facing * 7, worm.y + 11, 34, 4);
+  graphics.fillEllipse(worm.x - facing * 7, shadowY + 11, 34, 4);
 
-  // The active worm's "it's your turn" marker is the pulsing gold glow
-  // halo (GameScene's activeWormGlow, a separate GameObject) - a flat
+  // The active worm's "it's your turn" marker is the bouncing arrow above
+  // its head (GameScene's activeWormArrow, a separate GameObject) - a flat
   // stroked ring here would just double up on it.
 
   // Tapering tail segments, drawn back-to-front so each overlaps cleanly
@@ -758,6 +962,13 @@ function drawWorm(
   graphics.fillEllipse(head.x - facing * 3, head.y - 5, 8, 4.8);
   graphics.fillStyle(0x6e4037, 0.18);
   graphics.fillEllipse(head.x + facing * 4, head.y + 1, 3, 6);
+
+  // Freckle/scale texture spots, unique per worm - breaks up the flat skin
+  // fill so the head reads as a textured hide rather than a plain circle.
+  graphics.fillStyle(BODY_SHADE_COLOR, 0.75);
+  for (const spot of wormFreckleSpots(worm.name)) {
+    graphics.fillCircle(head.x + spot.dx * facing, head.y + spot.dy, spot.r);
+  }
 
   // Front arm, reaching from the head to the fist/weapon-grip point.
   graphics.lineStyle(6, BODY_COLOR, 1);
@@ -816,7 +1027,7 @@ export function deathWiggleScale(elapsedMs: number, durationMs: number): number 
   return 1 + Math.sin(fraction * Math.PI * 8) * 0.15;
 }
 
-function drawDyingWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, elapsedMs: number): void {
+function drawDyingWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, elapsedMs: number, terrain: Terrain): void {
   const fraction = Math.max(0, Math.min(1, elapsedMs / DEATH_ANIM_DURATION_MS));
 
   if (fraction >= DEATH_WIGGLE_END_FRACTION) {
@@ -836,7 +1047,7 @@ function drawDyingWorm(graphics: Phaser.GameObjects.Graphics, worm: Worm, elapse
   graphics.rotateCanvas(rotation);
   graphics.scaleCanvas(scale, scale);
   graphics.translateCanvas(-worm.x, -worm.y);
-  drawWorm(graphics, worm, false, elapsedMs);
+  drawWorm(graphics, worm, false, elapsedMs, terrain);
   graphics.restore();
 }
 
@@ -938,6 +1149,11 @@ const PROJECTILE_COLORS: Record<WeaponKey, number> = {
   shotgun: 0xffd966,
   ninjaRope: 0x8d6e63,
   dynamite: 0xd7263d,
+  sniperRifle: 0x2e2e38,
+  airstrikeRocket: 0x4fc3f7,
+  holyHandGrenade: 0xffd700,
+  mine: 0x37474f,
+  drill: 0xd8dde3,
 };
 
 const FUSE_BLINK_START_HZ = 1.5;
@@ -980,6 +1196,7 @@ export function drawScene(
   timeMs: number,
   explosions: Explosion[],
   splashes: Splash[],
+  terrain: Terrain,
 ): void {
   graphics.clear();
   drawGravestones(graphics, gravestones);
@@ -1039,21 +1256,28 @@ export function drawScene(
   for (const worm of worms) {
     if (!worm.alive) continue;
     if (worm.dying) {
-      drawDyingWorm(graphics, worm, DEATH_ANIM_DURATION_MS - (worm.deathTimer ?? 0));
+      drawDyingWorm(graphics, worm, DEATH_ANIM_DURATION_MS - (worm.deathTimer ?? 0), terrain);
       continue;
     }
     const isActive = Boolean(active && worm === active.worm);
-    drawWorm(graphics, worm, isActive, timeMs, isActive ? activeWeaponKey : undefined);
+    drawWorm(graphics, worm, isActive, timeMs, terrain, isActive ? activeWeaponKey : undefined);
 
-    const barWidth = 26;
-    const barHeight = 5;
+    // A stroked "pill" (dark backing + team-colored border) rather than a
+    // bare bar, so it reads as a nameplate badge - the worm's name (a
+    // separate Phaser.Text GameScene owns, positioned just above this) sits
+    // on top of it.
+    const barWidth = 28;
+    const barHeight = 6;
     const barX = worm.x - barWidth / 2;
-    const barY = worm.y - 27;
+    const barY = worm.y - 25;
     const hpFrac = worm.hp / STARTING_HP;
     const hpColor = hpFrac > 0.5 ? 0x6fbf4a : hpFrac > 0.25 ? 0xffd966 : 0xe85d5d;
+    const teamColor = TEAM_COLORS[worm.team] ?? 0xdddddd;
 
-    graphics.fillStyle(0x16213f, 0.55);
-    graphics.fillRoundedRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2, 3);
+    graphics.fillStyle(0x16213f, 0.78);
+    graphics.fillRoundedRect(barX - 2, barY - 2, barWidth + 4, barHeight + 4, 4);
+    graphics.lineStyle(1, teamColor, 0.9);
+    graphics.strokeRoundedRect(barX - 2, barY - 2, barWidth + 4, barHeight + 4, 4);
     graphics.fillStyle(hpColor, 1);
     graphics.fillRoundedRect(barX, barY, Math.max(0, barWidth * hpFrac), barHeight, 2);
   }
@@ -1110,6 +1334,38 @@ export function drawScene(
       graphics.lineBetween(projectile.x - 5, projectile.y - 1, projectile.x + 7, projectile.y - 1);
       graphics.fillStyle(0xffe58a, isBlinkingRed ? 1 : 0.65);
       graphics.fillCircle(projectile.x + 6, projectile.y - 8, isBlinkingRed ? 3 : 2);
+    } else if (projectile.weaponKey === 'airstrikeRocket') {
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      graphics.save();
+      graphics.translateCanvas(projectile.x, projectile.y);
+      graphics.rotateCanvas(angle);
+      graphics.fillStyle(0x123b55, 0.22);
+      graphics.fillEllipse(-17, 0, 30, 8);
+      graphics.fillStyle(0x4fc3f7, 1);
+      graphics.fillRoundedRect(-7, -2.5, 12, 5, 2);
+      graphics.fillStyle(0xe6f7ff, 1);
+      graphics.fillTriangle(5, -2.5, 5, 2.5, 10, 0);
+      graphics.fillStyle(0x1c8fc7, 1);
+      graphics.fillTriangle(-5, -2.5, -10, -6, -4, -1.8);
+      graphics.fillTriangle(-5, 2.5, -10, 6, -4, 1.8);
+      graphics.restore();
+    } else if (projectile.weaponKey === 'mine') {
+      graphics.fillStyle(0x10171a, 0.22);
+      graphics.fillEllipse(projectile.x + 1, projectile.y + 5, 16, 6);
+      graphics.fillStyle(fillColor, 1);
+      graphics.fillCircle(projectile.x, projectile.y, 5);
+      graphics.fillStyle(0x7b8a91, 0.4);
+      graphics.fillCircle(projectile.x - 1.5, projectile.y - 1.5, 2);
+      graphics.lineStyle(1.4, 0x1c262b, 1);
+      for (const angle of [0, 90, 180, 270]) {
+        const rad = (angle * Math.PI) / 180;
+        graphics.lineBetween(
+          projectile.x + Math.cos(rad) * 5,
+          projectile.y + Math.sin(rad) * 5,
+          projectile.x + Math.cos(rad) * 8,
+          projectile.y + Math.sin(rad) * 8,
+        );
+      }
     } else if (projectile.weaponKey === 'grenade') {
       graphics.fillStyle(0x203719, 0.25);
       graphics.fillEllipse(projectile.x + 1.5, projectile.y + 2.5, 11, 7);
@@ -1143,6 +1399,11 @@ const WEAPON_LABELS: Record<WeaponKey, string> = {
   shotgun: 'Shotgun',
   ninjaRope: 'Ninja Rope',
   dynamite: 'Dynamite',
+  sniperRifle: 'Sniper Rifle',
+  airstrikeRocket: 'Airstrike Rocket',
+  holyHandGrenade: 'Holy Hand Grenade',
+  mine: 'Mine',
+  drill: 'Drill',
 };
 
 export function weaponLabel(selectedWeapon: number): string {
@@ -1151,10 +1412,13 @@ export function weaponLabel(selectedWeapon: number): string {
 }
 
 export function updateHud(hudText: Phaser.GameObjects.Text, matchState: MatchState, selectedWeapon: number): void {
+  const key = WEAPON_KEYS[selectedWeapon - 1] ?? WEAPON_KEYS[0];
+  const actionHint = WEAPONS[key].airstrike ? '\nFire to call random rain' : '';
   hudText.setText(
     `Wind: ${matchState.wind.toFixed(1)}\n` +
       `Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s\n` +
-      `Weapon: ${selectedWeapon} - ${weaponLabel(selectedWeapon)}`,
+      `Weapon: ${selectedWeapon} - ${weaponLabel(selectedWeapon)}` +
+      actionHint,
   );
 }
 
@@ -1205,11 +1469,35 @@ export function teamHealthBarX(index: number, canvasWidth: number): number {
   return index === 0 ? TEAM_BAR_MARGIN : canvasWidth - TEAM_BAR_MARGIN - TEAM_BAR_WIDTH;
 }
 
+// Subtle canvas-grain speckle for UI chrome (HUD panel, health bar frames)
+// so flat rounded-rect fills read as a lightly textured card instead of
+// solid color. A sparse deterministic grid - cheap enough to redraw every
+// frame for the health bars, and used once for the static HUD panel.
+export function drawPanelGrain(
+  graphics: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  seed: number,
+): void {
+  const cell = 4;
+  for (let gy = 0; gy * cell < height; gy++) {
+    for (let gx = 0; gx * cell < width; gx++) {
+      const hash = terrainPixelHash(gx, gy, seed);
+      if (hash < 165) continue;
+      graphics.fillStyle(0xffffff, 0.08 + (hash % 30) / 300);
+      graphics.fillRect(x + gx * cell + (hash % cell), y + gy * cell + ((hash >> 3) % cell), 1.5, 1.5);
+    }
+  }
+}
+
 // One life bar per team across the top of the screen: the first team's bar
 // is left-aligned, the second team's is right-aligned. This project always
 // creates exactly two teams (see matchLoop.ts's createMatchRuntime), so a
 // two-slot left/right layout is sufficient.
 export function drawTeamHealthBars(graphics: Phaser.GameObjects.Graphics, teams: Team[], canvasWidth: number): void {
+  graphics.clear();
   teams.forEach((team, index) => {
     const x = teamHealthBarX(index, canvasWidth);
     const y = TEAM_BAR_TOP;
@@ -1220,6 +1508,7 @@ export function drawTeamHealthBars(graphics: Phaser.GameObjects.Graphics, teams:
     graphics.fillRoundedRect(x - 2, y - 2, TEAM_BAR_WIDTH + 4, TEAM_BAR_HEIGHT + 4, 6);
     graphics.fillStyle(0x0f172e, 1);
     graphics.fillRoundedRect(x, y, TEAM_BAR_WIDTH, TEAM_BAR_HEIGHT, 4);
+    drawPanelGrain(graphics, x - 2, y - 2, TEAM_BAR_WIDTH + 4, TEAM_BAR_HEIGHT + 4, index === 0 ? 811 : 823);
     graphics.fillStyle(0xffffff, 0.08);
     graphics.fillRoundedRect(x + 1, y + 1, TEAM_BAR_WIDTH - 2, 5, 3);
     graphics.fillStyle(color, 1);

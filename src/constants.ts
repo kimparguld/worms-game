@@ -12,7 +12,7 @@ export const TURN_BANNER_DURATION_MS = 1500; // ms the "Player N turn" banner sh
 export const ROPE_HOP_IMPULSE = 120; // px/s upward nudge applied when the ninja rope attaches, so a grounded worm lifts off enough for the swing physics to take over
 export const ROPE_ADJUST_SPEED = 150; // px/s the rope reels in/pays out while swinging, from the up/down arrow keys
 export const ROPE_MIN_LENGTH = 20; // px - shortest the rope can be reeled in to
-export const ROPE_MAX_LENGTH = 300; // px - matches fireRope's cast distance in matchLoop.ts, so paying out can never exceed the initial max reach
+export const ROPE_MAX_LENGTH = 300; // px - matches the ninja rope's cast distance, so paying out can never exceed its initial max reach
 export const DEATH_ANIM_DURATION_MS = 900; // ms a worm spends doing its death wiggle/poof before leaving a gravestone
 export const SHOTGUN_TRACER_DURATION = 0.15; // seconds the shotgun's tracer line stays visible after firing
 export const EXPLOSION_EFFECT_DURATION = 0.5; // seconds the fireball/shockwave visual plays after a projectile detonates
@@ -24,3 +24,9 @@ export const EXPLOSION_EFFECT_DURATION = 0.5; // seconds the fireball/shockwave 
 // revealed where terrain has been dug or blown away down to it.
 export const WATER_BAND_HEIGHT_FRACTION = 0.07;
 export const SPLASH_EFFECT_DURATION = 0.6; // seconds the splash visual plays when a worm hits the water
+export const WORLD_WIDTH = 1600; // px - the playable world's width; larger than the 1280 viewport so the zoomed-out camera (see GameScene) reveals more terrain
+export const WORLD_HEIGHT = 900; // px - same 16:9 ratio as the viewport, so the zoomed-out camera fits the whole world with no scrolling needed
+// Fallback worm names (2 per team) when the start screen's name fields are
+// left blank - also doubles as that screen's field placeholders, so the
+// label shown while empty always matches the name a blank field produces.
+export const DEFAULT_WORM_NAMES: [string, string, string, string] = ['W1', 'W2', 'W3', 'W4'];

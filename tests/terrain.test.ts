@@ -3,7 +3,8 @@ import { createTerrain, generateSilhouetteMask, isSolid, carveCircle, findSurfac
 
 describe('generateSilhouetteMask', () => {
   it('produces empty sky in the upper region and solid ground in the lower region', () => {
-    const width = 100, height = 100;
+    const width = 100,
+      height = 100;
     const mask = generateSilhouetteMask(width, height);
     expect(mask.length).toBe(width * height);
     expect(mask[0 * width + 50]).toBe(0);
@@ -11,13 +12,17 @@ describe('generateSilhouetteMask', () => {
     // can legitimately leave any single column non-ground at this depth.
     let hasGroundAtRow85 = false;
     for (let x = 0; x < width; x++) {
-      if (mask[85 * width + x] === 1) { hasGroundAtRow85 = true; break; }
+      if (mask[85 * width + x] === 1) {
+        hasGroundAtRow85 = true;
+        break;
+      }
     }
     expect(hasGroundAtRow85).toBe(true);
   });
 
   it('reserves the bottom band for water, regardless of the generated ground height', () => {
-    const width = 100, height = 100;
+    const width = 100,
+      height = 100;
     const mask = generateSilhouetteMask(width, height);
     for (let x = 0; x < width; x++) {
       expect(mask[(height - 1) * width + x]).toBe(0);
@@ -29,18 +34,25 @@ describe('generateSilhouetteMask cliffs', () => {
   // Repeated because the cliff rise is randomized and then clamped to the
   // ground-height cap: this asserts the clamp can never eat the whole rise.
   it('carves at least one near-vertical wall face for the ninja rope to grapple', () => {
-    const width = 200, height = 200;
+    const width = 200,
+      height = 200;
     for (let attempt = 0; attempt < 40; attempt++) {
       const mask = generateSilhouetteMask(width, height);
       let maxJump = 0;
       for (let x = 1; x < width; x++) {
         let prevHeight = 0;
         for (let y = 0; y < height; y++) {
-          if (mask[y * width + (x - 1)] === 1) { prevHeight = height - y; break; }
+          if (mask[y * width + (x - 1)] === 1) {
+            prevHeight = height - y;
+            break;
+          }
         }
         let curHeight = 0;
         for (let y = 0; y < height; y++) {
-          if (mask[y * width + x] === 1) { curHeight = height - y; break; }
+          if (mask[y * width + x] === 1) {
+            curHeight = height - y;
+            break;
+          }
         }
         maxJump = Math.max(maxJump, Math.abs(curHeight - prevHeight));
       }
@@ -51,7 +63,8 @@ describe('generateSilhouetteMask cliffs', () => {
 
 describe('generateSilhouetteMask mountains', () => {
   it('produces a different silhouette on repeated calls (randomized, not fixed)', () => {
-    const width = 300, height = 200;
+    const width = 300,
+      height = 200;
     const maskA = generateSilhouetteMask(width, height);
     const maskB = generateSilhouetteMask(width, height);
     let differences = 0;
@@ -69,6 +82,40 @@ describe('generateSilhouetteMask buildings', () => {
   });
 });
 
+describe('generateSilhouetteMask floating islands', () => {
+  it('produces at least one column with a solid island above open sky above the main terrain', () => {
+    const width = 300,
+      height = 200;
+    let sawFloatingIsland = false;
+    for (let attempt = 0; attempt < 40 && !sawFloatingIsland; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      for (let x = 0; x < width && !sawFloatingIsland; x++) {
+        let sawSolid = false;
+        let sawGapAfterSolid = false;
+        for (let y = 0; y < height; y++) {
+          const solid = mask[y * width + x] !== 0;
+          if (solid && !sawSolid) sawSolid = true;
+          else if (!solid && sawSolid) sawGapAfterSolid = true;
+          else if (solid && sawGapAfterSolid) sawFloatingIsland = true;
+        }
+      }
+    }
+    expect(sawFloatingIsland).toBe(true);
+  });
+
+  it('never places a floating island in the top clearance zone', () => {
+    const width = 300,
+      height = 200;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      const clearRows = Math.floor(height * 0.19);
+      for (let i = 0; i < clearRows * width; i++) {
+        expect(mask[i]).toBe(0);
+      }
+    }
+  });
+});
+
 describe('generateSilhouetteMask height budget', () => {
   // Nothing may reach the top of the screen: a cliff or building clipped by
   // the top edge looks broken, and a worm spawned on one lands behind the HUD.
@@ -77,7 +124,8 @@ describe('generateSilhouetteMask height budget', () => {
   // than a looser 0.15, leaving only a hair of margin for float rounding, so
   // a regression that eats into the true 0.20 budget doesn't pass unnoticed.
   it('never puts solid terrain in the top 19% of the screen', () => {
-    const width = 300, height = 200;
+    const width = 300,
+      height = 200;
     for (let attempt = 0; attempt < 40; attempt++) {
       const mask = generateSilhouetteMask(width, height);
       const clearRows = Math.floor(height * 0.19);
@@ -98,7 +146,8 @@ describe('generateSilhouetteMask spawn columns', () => {
   // ground) at the spawn point, and a cliff face landing there would wall a
   // worm in on one side, or leave a bare pixel-thin ledge to spawn on.
   it('never puts a cliff face or a building at any of the four spawn X columns', () => {
-    const width = 960, height = 540;
+    const width = 960,
+      height = 540;
     const spawnColumns = [150, 200, 760, 810];
     // Natural mountain terrain is smooth sine-wave silhouette: adjacent
     // columns shift by a couple of pixels at most. A cliff, by contrast, is
@@ -155,7 +204,9 @@ describe('isSolid', () => {
 
 describe('findSurfaceY', () => {
   it('returns the known ground height for flat terrain', () => {
-    const width = 50, height = 50, groundY = 30;
+    const width = 50,
+      height = 50,
+      groundY = 30;
     const terrain = createTerrain(width, height);
     terrain.mask.fill(0);
     for (let x = 0; x < width; x++) {
@@ -168,6 +219,84 @@ describe('findSurfaceY', () => {
     const terrain = createTerrain(20, 20);
     terrain.mask.fill(0);
     expect(findSurfaceY(terrain, 10)).toBe(terrain.height);
+  });
+
+  it('finds the nearest solid row at or below a given start row, not the world-topmost one - a tunnel dug under an overhang (e.g. a building) has its own floor below the overhang, not at the overhang itself', () => {
+    const width = 10,
+      height = 40;
+    const terrain = createTerrain(width, height);
+    terrain.mask.fill(0);
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < 5; y++) terrain.mask[y * width + x] = 1; // overhang/building roof, rows 0-4
+      for (let y = 25; y < height; y++) terrain.mask[y * width + x] = 1; // tunnel floor, rows 25+
+      // rows 5-24 are the dug-out tunnel: open air
+    }
+    expect(findSurfaceY(terrain, 5)).toBe(0); // default: topmost surface in the column
+    expect(findSurfaceY(terrain, 5, 12)).toBe(25); // starting inside the tunnel: its own floor, not the roof above
+  });
+});
+
+describe('generateSilhouetteMask always has two cliffs', () => {
+  it('carves two separated near-vertical wall faces, not just one', () => {
+    const width = 200,
+      height = 200;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      const jumps: number[] = [];
+      let prevHeight = 0;
+      for (let y = 0; y < height; y++) {
+        if (mask[y * width + 0] === 1) {
+          prevHeight = height - y;
+          break;
+        }
+      }
+      for (let x = 1; x < width; x++) {
+        let curHeight = 0;
+        for (let y = 0; y < height; y++) {
+          if (mask[y * width + x] === 1) {
+            curHeight = height - y;
+            break;
+          }
+        }
+        if (Math.abs(curHeight - prevHeight) > height * 0.15) jumps.push(x);
+        prevHeight = curHeight;
+      }
+      // The two cliffs are sampled from disjoint fraction ranges (0.15-0.45
+      // and 0.55-0.85), fully on either side of the map's midpoint, so a
+      // jump found in each half confirms two distinct walls rather than one
+      // wall's two edges (which sit only CLIFF_WIDTH_FRACTION apart, well
+      // within one half).
+      const leftHalfJump = jumps.some((x) => x < width * 0.5);
+      const rightHalfJump = jumps.some((x) => x >= width * 0.5);
+      expect(leftHalfJump).toBe(true);
+      expect(rightHalfJump).toBe(true);
+    }
+  });
+});
+
+describe('generateSilhouetteMask has more buildings', () => {
+  it('marks at least 3 separate building spans across a handful of attempts', () => {
+    const width = 300,
+      height = 200;
+    let sawThreeOrMoreBuildings = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      let spans = 0;
+      let inSpan = false;
+      for (let x = 0; x < width; x++) {
+        let isBuilding = false;
+        for (let y = 0; y < height; y++) {
+          if (mask[y * width + x] === 2) {
+            isBuilding = true;
+            break;
+          }
+        }
+        if (isBuilding && !inSpan) spans++;
+        inSpan = isBuilding;
+      }
+      if (spans >= 3) sawThreeOrMoreBuildings = true;
+    }
+    expect(sawThreeOrMoreBuildings).toBe(true);
   });
 });
 

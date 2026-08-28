@@ -60,11 +60,60 @@
         background: rgba(15, 23, 46, 0.84);
         outline: none;
       }
+      .mobile-team-form .worm-row {
+        display: flex;
+        gap: 10px;
+      }
+      .mobile-team-form .worm-row input {
+        flex: 1 1 0;
+        width: auto;
+        font-size: 16px;
+      }
       .mobile-team-form input:focus {
         border-color: #ffd966;
       }
       .mobile-team-form button {
         padding: 10px 12px;
+        color: #16213f;
+        background: #ffd966;
+      }
+      .mobile-game-controls {
+        position: absolute;
+        left: 50%;
+        bottom: max(10px, env(safe-area-inset-bottom));
+        z-index: 10;
+        display: grid;
+        grid-template-columns: auto minmax(130px, 1fr) auto auto;
+        gap: 8px;
+        align-items: center;
+        width: min(94vw, 560px);
+        transform: translateX(-50%);
+        pointer-events: auto;
+      }
+      .mobile-game-controls button,
+      .mobile-game-controls output {
+        box-sizing: border-box;
+        min-height: 42px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        color: #fff8e7;
+        background: rgba(15, 23, 46, 0.82);
+        font:
+          800 15px 'Baloo 2',
+          sans-serif;
+        touch-action: manipulation;
+      }
+      .mobile-game-controls output {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 10px;
+        text-align: center;
+      }
+      .mobile-game-controls button {
+        padding: 8px 10px;
+      }
+      .mobile-game-controls .mobile-end-turn {
         color: #16213f;
         background: #ffd966;
       }

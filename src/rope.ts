@@ -3,10 +3,13 @@ import { GRAVITY, ROPE_ADJUST_SPEED, ROPE_MIN_LENGTH, ROPE_MAX_LENGTH } from './
 import type { Terrain, Worm, Rope } from './types.js';
 
 export function fireRope(originX: number, originY: number, angle: number, terrain: Terrain, maxLength: number): Rope {
+  if (isSolid(terrain, originX, originY)) {
+    return { attached: false, anchorX: null, anchorY: null, length: 0 };
+  }
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const step = 2;
-  for (let d = 0; d <= maxLength; d += step) {
+  for (let d = step; d <= maxLength; d += step) {
     const x = originX + dx * d;
     const y = originY + dy * d;
     if (isSolid(terrain, x, y)) {
@@ -17,7 +20,7 @@ export function fireRope(originX: number, originY: number, angle: number, terrai
 }
 
 export function updateRopeSwing(worm: Worm, rope: Rope, dt: number, terrain: Terrain): void {
-  if (rope.anchorX == null || rope.anchorY == null) return;
+  if (rope.anchorX == null || rope.anchorY == null || rope.length <= 0) return;
   const dx = worm.x - rope.anchorX;
   const dy = worm.y - rope.anchorY;
   const currentAngle = Math.atan2(dy, dx);

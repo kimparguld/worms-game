@@ -1,8 +1,8 @@
-import { findSurfaceY, createTerrain, waterLevelY, SPAWN_EXCLUSION_FRACTIONS } from './terrain.js';
+import { findSurfaceY, createTerrain, waterLevelY, SPAWN_EXCLUSION_FRACTIONS, carveCircle } from './terrain.js';
 import { createWorm, updateWormPhysics, adjustAim, takeDamage, tickDeathAnimation } from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js';
 import { createProjectile, updateProjectile } from './projectile.js';
-import { raycastHit, WEAPONS } from './weapons.js';
+import { calcDamage, raycastHit, WEAPONS } from './weapons.js';
 import { fireRope, updateRopeSwing, adjustRopeLength } from './rope.js';
 import {
   TURN_BANNER_DURATION_MS,
@@ -10,18 +10,33 @@ import {
   SHOTGUN_TRACER_DURATION,
   EXPLOSION_EFFECT_DURATION,
   SPLASH_EFFECT_DURATION,
+  DEFAULT_WORM_NAMES,
 } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2 } from './types.js';
 
-export const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
+export const WEAPON_KEYS: WeaponKey[] = [
+  'bazooka',
+  'grenade',
+  'shotgun',
+  'ninjaRope',
+  'dynamite',
+  'sniperRifle',
+  'airstrikeRocket',
+  'holyHandGrenade',
+  'mine',
+  'drill',
+];
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
+const AIRSTRIKE_STRIKE_COUNT = 5;
+const AIRSTRIKE_EDGE_MARGIN = 40;
 
 export function createMatchRuntime(
   width: number,
   height: number,
   team1Name = 'Team 1',
   team2Name = 'Team 2',
+  wormNames: [string, string, string, string] = DEFAULT_WORM_NAMES,
 ): MatchRuntime {
   const terrain = createTerrain(width, height);
   const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
@@ -32,12 +47,12 @@ export function createMatchRuntime(
     {
       playerId: 'p1',
       name: team1Name,
-      worms: [createWorm(p1aX, spawnY(p1aX), 'p1', 'W1'), createWorm(p1bX, spawnY(p1bX), 'p1', 'W2')],
+      worms: [createWorm(p1aX, spawnY(p1aX), 'p1', wormNames[0]), createWorm(p1bX, spawnY(p1bX), 'p1', wormNames[1])],
     },
     {
       playerId: 'p2',
       name: team2Name,
-      worms: [createWorm(p2aX, spawnY(p2aX), 'p2', 'W3'), createWorm(p2bX, spawnY(p2bX), 'p2', 'W4')],
+      worms: [createWorm(p2aX, spawnY(p2aX), 'p2', wormNames[2]), createWorm(p2bX, spawnY(p2bX), 'p2', wormNames[3])],
     },
   ];
   return {
@@ -61,26 +76,68 @@ function allWorms(rt: MatchRuntime): Worm[] {
   return rt.teams.flatMap((t) => t.worms);
 }
 
+function detonateAt(rt: MatchRuntime, weaponKey: WeaponKey, x: number, y: number): void {
+  const def = WEAPONS[weaponKey];
+  if (def.craterRadius > 0) carveCircle(rt.terrain, x, y, def.craterRadius);
+  for (const target of allWorms(rt)) {
+    if (!target.alive || target.dying) continue;
+    const damage = calcDamage(Math.hypot(target.x - x, target.y - y), def.blastRadius, def.maxDamage);
+    if (damage > 0) takeDamage(target, damage);
+  }
+  rt.explosions.push({ x, y, radius: def.craterRadius, timer: EXPLOSION_EFFECT_DURATION });
+  rt.retirementTimer = 1;
+}
+
+function drillTerrain(rt: MatchRuntime, worm: Worm, angle: number, range: number, radius: number): void {
+  const step = Math.max(4, radius * 0.7);
+  for (let distance = radius; distance <= range; distance += step) {
+    carveCircle(rt.terrain, worm.x + Math.cos(angle) * distance, worm.y + Math.sin(angle) * distance, radius);
+  }
+  rt.explosions.push({
+    x: worm.x + Math.cos(angle) * range,
+    y: worm.y + Math.sin(angle) * range,
+    radius,
+    timer: EXPLOSION_EFFECT_DURATION,
+  });
+  rt.retirementTimer = 1;
+}
+
+function rainAirstrike(rt: MatchRuntime, weaponKey: WeaponKey): void {
+  const margin = Math.min(AIRSTRIKE_EDGE_MARGIN, rt.terrain.width / 4);
+  const usableWidth = Math.max(1, rt.terrain.width - margin * 2);
+  for (let i = 0; i < AIRSTRIKE_STRIKE_COUNT; i++) {
+    const x = margin + Math.random() * usableWidth;
+    const y = findSurfaceY(rt.terrain, x);
+    detonateAt(rt, weaponKey, x, y);
+  }
+  rt.retirementTimer = 1.2;
+}
+
 function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: number): void {
   const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
+  const def = WEAPONS[weaponKey];
 
-  if (weaponKey === 'shotgun') {
+  if (def.airstrike) {
+    rainAirstrike(rt, weaponKey);
+  } else if (def.drill) {
+    drillTerrain(rt, worm, fireAngle, def.range ?? 120, def.craterRadius);
+  } else if (def.hitscan) {
     const hits: Vector2[] = [];
-    for (let i = 0; i < WEAPONS.shotgun.pellets; i++) {
-      // Non-null: shotgun's range is always defined (see WEAPONS.shotgun
-      // above); the '?' on WeaponDef.range exists only because other
-      // weapons omit it.
-      const hit = raycastHit(rt.terrain, allWorms(rt), worm.x, worm.y, fireAngle, WEAPONS.shotgun.range!, worm);
-      if (hit.type === 'worm' && hit.worm) takeDamage(hit.worm, WEAPONS.shotgun.maxDamage);
+    for (let i = 0; i < def.pellets; i++) {
+      // Non-null: every hitscan weapon (shotgun, sniperRifle) defines
+      // `range` - the '?' on WeaponDef.range exists only because
+      // non-hitscan, non-rope weapons omit it.
+      const hit = raycastHit(rt.terrain, allWorms(rt), worm.x, worm.y, fireAngle, def.range!, worm);
+      if (hit.type === 'worm' && hit.worm) takeDamage(hit.worm, def.maxDamage);
       hits.push({ x: hit.x, y: hit.y });
     }
-    // The shotgun deals damage via an instant raycast with nothing added to
-    // rt.projectiles, so without this tracer a shot is completely invisible
-    // on screen - hit or miss - which reads as the weapon doing nothing.
+    // Reused for any hitscan weapon (not just the shotgun) as the visible
+    // trace of an instant raycast shot - see the ShotgunTracer type.
     rt.shotgunTracer = { originX: worm.x, originY: worm.y, hits, timer: SHOTGUN_TRACER_DURATION };
     rt.retirementTimer = 1;
-  } else if (weaponKey === 'ninjaRope') {
-    const result = fireRope(worm.x, worm.y, fireAngle, rt.terrain, 300);
+  } else if (def.rope) {
+    // Non-null: every rope weapon defines `range` as its cast distance.
+    const result = fireRope(worm.x, worm.y, fireAngle, rt.terrain, def.range!);
     rt.rope = result.attached ? result : null;
     // A grounded worm's very next physics tick would otherwise re-plant it
     // on the ground before the swing can take over - a small upward nudge
@@ -139,6 +196,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   const neutralInput: WormInput = { left: false, right: false, jump: false };
   const isRetiring = rt.retirementTimer !== null;
   const canRetreatFromStaticFuse = isRetiring && hasActiveStaticFuseProjectile(rt, worm);
+  let activeWormDiedInWater = false;
   for (const w of allWorms(rt)) {
     const wormInput = w === worm && (!isRetiring || canRetreatFromStaticFuse) ? input : neutralInput;
     const wasAlive = w.alive;
@@ -148,13 +206,14 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     // `dying` first, so this cleanly identifies a water death.
     if (wasAlive && !w.alive) {
       rt.splashes.push({ x: w.x, y: waterLevelY(rt.terrain), timer: SPLASH_EFFECT_DURATION });
+      if (w === worm) activeWormDiedInWater = true;
     }
     if (tickDeathAnimation(w, dt * 1000)) {
       rt.gravestones.push({ x: w.x, y: w.y });
     }
   }
 
-  if (canAct) {
+  if (canAct && worm.alive && !worm.dying && !activeWormDiedInWater) {
     // While swinging on the rope, up/down arrows reel it in/out instead of
     // aiming - aiming is meaningless mid-swing since fireAngle isn't used
     // for anything until the rope is released.
@@ -216,7 +275,13 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   // including the retirement path's own advance, which used to be missed.
   let turnAdvanced = false;
 
-  if (rt.retirementTimer !== null) {
+  if (activeWormDiedInWater && advanceTurn(rt.match)) {
+    input.firing = false;
+    input.jump = false;
+    turnAdvanced = true;
+  }
+
+  if (!turnAdvanced && rt.retirementTimer !== null) {
     rt.retirementTimer -= dt;
     // Also wait for any in-flight explosion's visual to finish, not just for
     // the projectile itself to be gone - otherwise the turn (and the next

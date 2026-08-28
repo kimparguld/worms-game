@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { createMatchRuntime, stepMatch } from '../src/matchLoop.js';
+import { describe, it, expect, vi } from 'vitest';
+import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../src/matchLoop.js';
 import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
@@ -84,6 +84,18 @@ describe('createMatchRuntime', () => {
     const rt = createMatchRuntime(960, 540, 'Sharks', 'Jets');
     expect(rt.teams[0].name).toBe('Sharks');
     expect(rt.teams[1].name).toBe('Jets');
+  });
+
+  it('defaults worm names to "W1"-"W4" when none are given', () => {
+    const rt = createMatchRuntime(960, 540);
+    expect(rt.teams[0].worms.map((w) => w.name)).toEqual(['W1', 'W2']);
+    expect(rt.teams[1].worms.map((w) => w.name)).toEqual(['W3', 'W4']);
+  });
+
+  it('uses the given worm names when provided', () => {
+    const rt = createMatchRuntime(960, 540, 'Sharks', 'Jets', ['Zack', 'Wilfred', 'Gravy', 'Brain']);
+    expect(rt.teams[0].worms.map((w) => w.name)).toEqual(['Zack', 'Wilfred']);
+    expect(rt.teams[1].worms.map((w) => w.name)).toEqual(['Gravy', 'Brain']);
   });
 });
 
@@ -214,6 +226,19 @@ describe('stepMatch dying-worm guard', () => {
     expect(teams[1].worms[0].hp).toBe(STARTING_HP);
     expect(rt.charging).toBe(false);
     expect(rt.rope).not.toBeNull();
+  });
+
+  it('does not let lethal fall damage fire a weapon in the same frame', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.vy = 1_000;
+    const input = makeInput({ firing: true, selectedWeapon: 3 }); // shotgun
+
+    stepMatch(rt, input, 0.016);
+
+    expect(worm.dying).toBe(true);
+    expect(rt.shotgunTracer).toBeNull();
+    expect(rt.retirementTimer).toBeNull();
   });
 });
 
@@ -585,6 +610,21 @@ describe('stepMatch water', () => {
     expect(rt.splashes[0].x).toBeCloseTo(worm.x, 5);
   });
 
+  it('automatically advances the turn when the active worm falls into the water', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.y = 190; // past the water line for this 200-tall test terrain
+    const input = makeInput({ firing: true });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(worm.alive).toBe(false);
+    expect(rt.match.currentIndex).toBe(1);
+    expect(rt.turnBannerTimer).toBe(TURN_BANNER_DURATION_MS);
+    expect(rt.charging).toBe(false);
+    expect(input.firing).toBe(false);
+  });
+
   it('does not record a splash for a worm dying from damage on dry land', () => {
     const rt = makeRuntime(twoWormTeams());
     const worm = rt.match.turnOrder[0].worm;
@@ -596,5 +636,79 @@ describe('stepMatch water', () => {
     stepMatch(rt, input, 0.02);
 
     expect(rt.splashes).toHaveLength(0);
+  });
+});
+
+describe('WEAPON_KEYS', () => {
+  it('lists all ten weapons, with drill replacing the grappling hook slot', () => {
+    expect(WEAPON_KEYS).toEqual([
+      'bazooka',
+      'grenade',
+      'shotgun',
+      'ninjaRope',
+      'dynamite',
+      'sniperRifle',
+      'airstrikeRocket',
+      'holyHandGrenade',
+      'mine',
+      'drill',
+    ]);
+  });
+});
+
+describe('stepMatch sniper rifle', () => {
+  it('deals damage to a worm hit by the precise hitscan shot, just like the shotgun does', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const target = rt.teams[1].worms[0];
+    const shooter = rt.match.turnOrder[0].worm;
+    shooter.aimAngle = 0; // level shot toward the target, which sits at the same y
+    const sniperRifleIndex = WEAPON_KEYS.indexOf('sniperRifle') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: sniperRifleIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(target.hp).toBe(STARTING_HP - WEAPONS.sniperRifle.maxDamage);
+  });
+});
+
+describe('stepMatch airstrike', () => {
+  it('calls a random barrage without launching a projectile', () => {
+    const teams = twoWormTeams();
+    const rt = makeRuntime(teams);
+    const airstrikeIndex = WEAPON_KEYS.indexOf('airstrikeRocket') + 1;
+    const randomSpy = vi
+      .spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.25)
+      .mockReturnValueOnce(0.5)
+      .mockReturnValueOnce(0.75)
+      .mockReturnValueOnce(1);
+    const input = makeInput({ firing: true, selectedWeapon: airstrikeIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    randomSpy.mockRestore();
+    expect(input.firing).toBe(false);
+    expect(rt.projectiles).toHaveLength(0);
+    expect(rt.explosions).toHaveLength(5);
+    expect(rt.explosions.map((explosion) => explosion.x)).toEqual([40, 70, 100, 130, 160]);
+    expect(new Set(rt.explosions.map((explosion) => explosion.x)).size).toBeGreaterThan(1);
+  });
+});
+
+describe('stepMatch drill', () => {
+  it('carves terrain along the active worm aim line without attaching a rope', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.aimAngle = 0;
+    const drillIndex = WEAPON_KEYS.indexOf('drill') + 1;
+    const targetIndex = 150 * rt.terrain.width + 95;
+    expect(rt.terrain.mask[targetIndex]).toBe(1);
+
+    stepMatch(rt, makeInput({ firing: true, selectedWeapon: drillIndex }), 0.016);
+
+    expect(rt.terrain.mask[targetIndex]).toBe(0);
+    expect(rt.rope).toBeNull();
+    expect(rt.projectiles).toHaveLength(0);
   });
 });

@@ -16,8 +16,20 @@ import {
   terrainMaterialColor,
   surfaceDecorationHeight,
   isShorelinePixel,
+  terrainSpeckle,
+  wormShadowY,
+  wormFreckleSpots,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
+import type { Terrain } from '../src/types.js';
+
+function flatTerrain(width: number, height: number, groundY: number): Terrain {
+  const mask = new Uint8Array(width * height);
+  for (let y = groundY; y < height; y++) {
+    for (let x = 0; x < width; x++) mask[y * width + x] = 1;
+  }
+  return { width, height, mask };
+}
 
 describe('turnBannerLabel', () => {
   it('formats a playerId like "p2" as "Player 2 turn"', () => {
@@ -86,12 +98,23 @@ describe('chargeBarColor', () => {
 });
 
 describe('weaponLabel', () => {
-  it('names each of the five selectable weapons', () => {
-    expect([1, 2, 3, 4, 5].map(weaponLabel)).toEqual(['Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite']);
+  it('names each of the ten selectable weapons', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(weaponLabel)).toEqual([
+      'Bazooka',
+      'Grenade',
+      'Shotgun',
+      'Ninja Rope',
+      'Dynamite',
+      'Sniper Rifle',
+      'Airstrike Rocket',
+      'Holy Hand Grenade',
+      'Mine',
+      'Drill',
+    ]);
   });
 
   it('falls back to the default weapon for an out-of-range selection', () => {
-    expect(weaponLabel(9)).toBe('Bazooka');
+    expect(weaponLabel(99)).toBe('Bazooka');
   });
 });
 
@@ -200,6 +223,20 @@ describe('terrainPixelHash', () => {
   });
 });
 
+describe('wormFreckleSpots', () => {
+  it('is deterministic for the same worm name', () => {
+    expect(wormFreckleSpots('Rocky')).toEqual(wormFreckleSpots('Rocky'));
+  });
+
+  it('varies between different worm names', () => {
+    expect(wormFreckleSpots('Rocky')).not.toEqual(wormFreckleSpots('Slinky'));
+  });
+
+  it('never places more than 6 spots', () => {
+    expect(wormFreckleSpots('Rocky').length).toBeLessThanOrEqual(6);
+  });
+});
+
 describe('terrainMaterialColor', () => {
   it('uses distinct colors for grass, soil, clay, and rock depths', () => {
     const grass = terrainMaterialColor({ material: 1, depth: 1, x: 10, y: 20 });
@@ -252,5 +289,54 @@ describe('isShorelinePixel', () => {
     mask[8 * width + 5] = 1;
     expect(isShorelinePixel(mask, width, height, 5, 8)).toBe(false);
     expect(isShorelinePixel(mask, width, height, 5, 1)).toBe(false);
+  });
+});
+
+describe('terrainSpeckle', () => {
+  it('is deterministic for the same coordinates', () => {
+    expect(terrainSpeckle(12, 34)).toBe(terrainSpeckle(12, 34));
+  });
+
+  it('varies across different coordinates, not a flat single offset', () => {
+    const values = new Set<number>();
+    for (let x = 0; x < 20; x++) values.add(terrainSpeckle(x, 0));
+    expect(values.size).toBeGreaterThan(1);
+  });
+
+  it('stays within a small, bounded offset range', () => {
+    for (let x = 0; x < 50; x++) {
+      const v = terrainSpeckle(x, x * 3);
+      expect(v).toBeGreaterThanOrEqual(-10);
+      expect(v).toBeLessThanOrEqual(10);
+    }
+  });
+});
+
+describe('wormShadowY', () => {
+  it("stays pinned to the ground surface regardless of the worm's current height, so a jumping worm's shadow does not follow it into the air", () => {
+    const terrain = flatTerrain(10, 20, 15);
+    const grounded = createWorm(5, 15, 'p1', 'W1');
+    const midJump = createWorm(5, 2, 'p1', 'W1'); // same x, high up mid-jump
+    expect(wormShadowY(midJump, terrain)).toBe(wormShadowY(grounded, terrain));
+  });
+
+  it("matches the terrain surface Y at the worm's x position", () => {
+    const terrain = flatTerrain(10, 20, 15);
+    const worm = createWorm(3, 0, 'p1', 'W1');
+    expect(wormShadowY(worm, terrain)).toBe(15);
+  });
+
+  it('lands on the tunnel floor, not a building/overhang above, when the worm is standing in a dug-out tunnel beneath one', () => {
+    const width = 10,
+      height = 40;
+    const mask = new Uint8Array(width * height);
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < 5; y++) mask[y * width + x] = 1; // overhang roof, rows 0-4
+      for (let y = 25; y < height; y++) mask[y * width + x] = 1; // tunnel floor, rows 25+
+      // rows 5-24: dug-out tunnel, open air
+    }
+    const terrain: Terrain = { width, height, mask };
+    const wormInTunnel = createWorm(4, 20, 'p1', 'W1'); // resting on the tunnel floor at y=20, under the roof
+    expect(wormShadowY(wormInTunnel, terrain)).toBe(25);
   });
 });

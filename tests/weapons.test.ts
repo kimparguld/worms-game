@@ -4,20 +4,76 @@ import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 
 describe('WEAPONS', () => {
-  it('defines exactly the five spec weapons', () => {
+  it('defines exactly the ten spec weapons', () => {
     expect(Object.keys(WEAPONS).sort()).toEqual(
-      ['bazooka', 'dynamite', 'grenade', 'ninjaRope', 'shotgun'].sort()
+      [
+        'bazooka',
+        'dynamite',
+        'grenade',
+        'ninjaRope',
+        'shotgun',
+        'sniperRifle',
+        'airstrikeRocket',
+        'holyHandGrenade',
+        'mine',
+        'drill',
+      ].sort(),
     );
   });
 });
 
-describe('WEAPONS range', () => {
-  it('gives the bazooka enough max speed to cross most of the map at full charge', () => {
-    expect(WEAPONS.bazooka.maxSpeed).toBe(850);
+describe('WEAPONS new arsenal', () => {
+  it('gives the sniper rifle a precise long-range hitscan shot with no blast', () => {
+    expect(WEAPONS.sniperRifle.hitscan).toBe(true);
+    expect(WEAPONS.sniperRifle.pellets).toBe(1);
+    expect(WEAPONS.sniperRifle.blastRadius).toBe(0);
+    expect(WEAPONS.sniperRifle.range).toBe(1000);
   });
 
-  it('gives the grenade enough max speed to reach well past a short lob', () => {
-    expect(WEAPONS.grenade.maxSpeed).toBe(600);
+  it('makes the airstrike a random barrage instead of a precise targeted shot', () => {
+    expect(WEAPONS.airstrikeRocket.gravity).toBe(false);
+    expect(WEAPONS.airstrikeRocket.windAffected).toBe(false);
+    expect(WEAPONS.airstrikeRocket.chargeable).toBe(false);
+    expect(WEAPONS.airstrikeRocket.airstrike).toBe(true);
+    expect(WEAPONS.airstrikeRocket.maxDamage).toBeLessThan(WEAPONS.bazooka.maxDamage);
+  });
+
+  it('gives the holy hand grenade a bigger blast and longer fuse than a regular grenade', () => {
+    expect(WEAPONS.holyHandGrenade.maxDamage).toBeGreaterThan(WEAPONS.grenade.maxDamage);
+    expect(WEAPONS.holyHandGrenade.blastRadius).toBeGreaterThan(WEAPONS.grenade.blastRadius);
+    expect(WEAPONS.holyHandGrenade.fuseTime).toBeGreaterThan(WEAPONS.grenade.fuseTime!);
+  });
+
+  it('drops the mine straight down with a long fuse instead of throwing it', () => {
+    expect(WEAPONS.mine.minSpeed).toBe(0);
+    expect(WEAPONS.mine.maxSpeed).toBe(0);
+    expect(WEAPONS.mine.fuseTime).toBe(10);
+  });
+
+  it('replaces the grappling hook with a drill that carves terrain', () => {
+    expect(WEAPONS.drill.drill).toBe(true);
+    expect(WEAPONS.drill.rope).toBe(false);
+    expect(WEAPONS.drill.range).toBeGreaterThan(0);
+  });
+
+  it('flags only the ninja rope as a rope weapon', () => {
+    const ropeWeapons = Object.values(WEAPONS)
+      .filter((w) => w.rope)
+      .map((w) => w.key)
+      .sort();
+    expect(ropeWeapons).toEqual(['ninjaRope']);
+  });
+});
+
+describe('WEAPONS range', () => {
+  it('gives the bazooka enough max speed to cross the bigger map at full charge', () => {
+    expect(WEAPONS.bazooka.minSpeed).toBe(250);
+    expect(WEAPONS.bazooka.maxSpeed).toBe(1100);
+  });
+
+  it('gives the grenade enough max speed and fuse time to travel and bounce further', () => {
+    expect(WEAPONS.grenade.maxSpeed).toBe(800);
+    expect(WEAPONS.grenade.fuseTime).toBe(4.5);
   });
 });
 

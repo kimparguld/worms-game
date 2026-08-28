@@ -28,9 +28,9 @@ export function waterLevelY(terrain: Terrain): number {
 // - above the 0.15 height jump the tests require for a rope-grabbable wall.
 const MOUNTAIN_BASE_FRACTION = 0.37;
 const MOUNTAIN_OCTAVES = [
-  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.11, minFrequency: 1, maxFrequency: 2 },
-  { minAmplitudeFraction: 0.025, maxAmplitudeFraction: 0.045, minFrequency: 2, maxFrequency: 4 },
-  { minAmplitudeFraction: 0.012, maxAmplitudeFraction: 0.025, minFrequency: 4, maxFrequency: 7 },
+  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.13, minFrequency: 1, maxFrequency: 2 },
+  { minAmplitudeFraction: 0.03, maxAmplitudeFraction: 0.06, minFrequency: 2, maxFrequency: 4 },
+  { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 7 },
 ];
 
 const CLIFF_WIDTH_FRACTION = 0.13;
@@ -123,6 +123,41 @@ const BUILDING_RISE_MAX_FRACTION = 0.26;
 const BUILDING_MIN_HEIGHT_FRACTION = 0.08;
 const MAX_BUILDING_ROOF_FRACTION = 0.8;
 
+// Detached blob-shaped landmasses floating above the main terrain - the
+// "chunk" look this project is aiming for (see the reference art in the
+// terrain-complexity plan). Radius is a fraction of *width* (like every
+// other footprint constant here), but the vertical band is a fraction of
+// *height* and picked with enough margin that even the largest island,
+// including its widest lobe overshoot, can never intrude into the top
+// clearance budget (0.19, see the height-budget comment above) - see the
+// worked-through worst-case in this file's terrain plan.
+const FLOATING_ISLAND_COUNT_MIN = 2;
+const FLOATING_ISLAND_COUNT_MAX = 4;
+const FLOATING_ISLAND_RADIUS_MIN_FRACTION = 0.02;
+const FLOATING_ISLAND_RADIUS_MAX_FRACTION = 0.035;
+const FLOATING_ISLAND_CENTER_Y_MIN_FRACTION = 0.33;
+const FLOATING_ISLAND_CENTER_Y_MAX_FRACTION = 0.5;
+// A lobe's center can drift up to 0.6*radius from the island's own center,
+// and a lobe's own radius can be up to 0.8*radius - so a lobe's footprint
+// can reach up to 1.4*radius from the island's nominal center. Widening the
+// spawn-column exclusion by this same factor keeps a lobe from ever
+// creeping closer to a spawn column than a plain circle of that width would.
+const FLOATING_ISLAND_LOBE_OVERSHOOT = 1.4;
+
+// Small subsurface pockets carved into the solid mass after everything else
+// is placed - purely a rendering/destruction detail (a dug-in weapon can
+// break into one and reveal a cavity instead of solid dirt), never touching
+// any column's topmost surface, so every existing surface-height invariant
+// (cliff jump, spawn column slope, top clearance) is unaffected by
+// construction: see carveCaves's per-column protected-depth check.
+const CAVE_COUNT_MIN = 3;
+const CAVE_COUNT_MAX = 6;
+const CAVE_RADIUS_MIN_FRACTION = 0.012;
+const CAVE_RADIUS_MAX_FRACTION = 0.028;
+// Depth below a column's own surface that a cave may never reach into,
+// measured in the same height-fraction terms as the rest of this file.
+const CAVE_MIN_DEPTH_FRACTION = 0.05;
+
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
@@ -176,8 +211,8 @@ function pickCliffCenterFraction(min: number, max: number): number {
 }
 
 function applyCliffs(heights: Float64Array, width: number, height: number): void {
-  // Two disjoint fraction ranges so a second cliff (if any) can never
-  // overlap the first and corrupt its boundary-height reference.
+  // Two disjoint fraction ranges so a second cliff can never overlap the
+  // first and corrupt its boundary-height reference.
   applyCliff(heights, width, height, pickCliffCenterFraction(0.15, 0.45));
   applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85));
 }
@@ -281,6 +316,109 @@ function applyBuildings(heights: Float64Array, width: number, height: number): S
   return buildingColumns;
 }
 
+function pickIslandCenterFraction(halfWidthFraction: number): number {
+  return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction);
+}
+
+// Stamps a small cluster of overlapping circular lobes (an irregular blob,
+// not a perfect disc) directly into the mask as ground material - detached
+// floating chunks read as their own silhouette with no heightmap column of
+// their own, so they're written straight into the mask rather than folded
+// into computeGroundHeights.
+//
+// Every write is clamped against the *current* mask's own topmost surface
+// per column (surfaceRow, read once before any island is placed) and the
+// same top-clearance budget every other feature respects. A cliff or
+// building can reach much higher than the average natural silhouette, so
+// this project's earlier fixed Y-band approach could let an island merge
+// into (and round off) a cliff face it happened to land near - clamping
+// against the real per-column surface instead guarantees an island can
+// never touch, let alone reshape, existing terrain, regardless of where a
+// cliff or building happens to sit.
+function applyFloatingIslands(mask: Uint8Array, width: number, height: number): void {
+  const surfaceRow = new Int32Array(width).fill(height);
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      if (mask[y * width + x] !== 0) {
+        surfaceRow[x] = y;
+        break;
+      }
+    }
+  }
+  const topClearanceRow = Math.ceil(height * 0.19) + 1;
+
+  const count = randomInt(FLOATING_ISLAND_COUNT_MIN, FLOATING_ISLAND_COUNT_MAX);
+  for (let i = 0; i < count; i++) {
+    const radius = randomBetween(
+      width * FLOATING_ISLAND_RADIUS_MIN_FRACTION,
+      width * FLOATING_ISLAND_RADIUS_MAX_FRACTION,
+    );
+    const halfWidthFraction = (radius * FLOATING_ISLAND_LOBE_OVERSHOOT) / width;
+    const centerX = Math.round(pickIslandCenterFraction(halfWidthFraction) * width);
+    const centerY = Math.round(
+      randomBetween(FLOATING_ISLAND_CENTER_Y_MIN_FRACTION, FLOATING_ISLAND_CENTER_Y_MAX_FRACTION) * height,
+    );
+
+    const lobeCount = randomInt(2, 3);
+    for (let lobe = 0; lobe < lobeCount; lobe++) {
+      const lobeAngle = randomBetween(0, Math.PI * 2);
+      const lobeDistance = lobe === 0 ? 0 : radius * randomBetween(0.3, 0.6);
+      const lobeRadius = radius * (lobe === 0 ? 1 : randomBetween(0.55, 0.8));
+      const lx = centerX + Math.cos(lobeAngle) * lobeDistance;
+      const ly = centerY + Math.sin(lobeAngle) * lobeDistance * 0.6;
+      const minX = Math.max(0, Math.floor(lx - lobeRadius));
+      const maxX = Math.min(width - 1, Math.ceil(lx + lobeRadius));
+      const minY = Math.max(topClearanceRow, Math.floor(ly - lobeRadius));
+      const maxY = Math.min(height - 1, Math.ceil(ly + lobeRadius));
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          if (y >= surfaceRow[x]) continue; // never touch/merge into this column's existing terrain
+          // Squashed vertically (0.85) so the lobe reads as a rounded chunk
+          // rather than a perfect circle.
+          if ((x - lx) ** 2 + ((y - ly) / 0.85) ** 2 <= lobeRadius * lobeRadius) mask[y * width + x] = 1;
+        }
+      }
+    }
+  }
+}
+
+// Carves small pockets into the solid mass, guaranteed to never reach a
+// column's own topmost surface (protected by CAVE_MIN_DEPTH_FRACTION), so
+// every surface-height invariant elsewhere in this file holds regardless of
+// where a cave lands.
+function carveCaves(mask: Uint8Array, width: number, height: number): void {
+  const surfaceRow = new Int32Array(width).fill(height);
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      if (mask[y * width + x] !== 0) {
+        surfaceRow[x] = y;
+        break;
+      }
+    }
+  }
+
+  const minDepth = height * CAVE_MIN_DEPTH_FRACTION;
+  const count = randomInt(CAVE_COUNT_MIN, CAVE_COUNT_MAX);
+  for (let i = 0; i < count; i++) {
+    const cx = Math.round(randomBetween(0, width - 1));
+    const localSurface = surfaceRow[cx];
+    if (localSurface >= height) continue; // an all-sky column - nothing to carve under
+    const radius = randomBetween(width * CAVE_RADIUS_MIN_FRACTION, width * CAVE_RADIUS_MAX_FRACTION);
+    const cy = localSurface + minDepth + radius + randomBetween(0, minDepth);
+
+    const minX = Math.max(0, Math.floor(cx - radius));
+    const maxX = Math.min(width - 1, Math.ceil(cx + radius));
+    const minY = Math.max(0, Math.floor(cy - radius));
+    const maxY = Math.min(height - 1, Math.ceil(cy + radius));
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        if (y <= surfaceRow[x] + minDepth) continue; // never touches this column's own surface
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= radius * radius) mask[y * width + x] = 0;
+      }
+    }
+  }
+}
+
 export function generateSilhouetteMask(width: number, height: number): Uint8Array {
   const mask = new Uint8Array(width * height);
   const heights = computeGroundHeights(width, height);
@@ -305,11 +443,13 @@ export function generateSilhouetteMask(width: number, height: number): Uint8Arra
       }
     }
   }
+  applyFloatingIslands(mask, width, height);
+  carveCaves(mask, width, height);
   return mask;
 }
 
 export function createTerrain(width: number, height: number): Terrain {
-  return { width, height, mask: generateSilhouetteMask(width, height) };
+  return { width, height, mask: generateSilhouetteMask(width, height), dirty: true };
 }
 
 export function isSolid(terrain: Terrain, x: number, y: number): boolean {
@@ -319,8 +459,14 @@ export function isSolid(terrain: Terrain, x: number, y: number): boolean {
   return terrain.mask[yi * terrain.width + xi] !== 0;
 }
 
-export function findSurfaceY(terrain: Terrain, x: number): number {
-  for (let y = 0; y < terrain.height; y++) {
+// Finds the nearest solid row at or below fromY - the world-topmost surface
+// by default (fromY = 0), but the same column can have solid rows above
+// fromY too (an overhang, or a building roof over a dug-out tunnel), which
+// this ignores: callers that already know roughly where they are (e.g. a
+// worm's shadow) pass their own y so they find the surface actually beneath
+// them, not whatever solid ground happens to sit higher up that column.
+export function findSurfaceY(terrain: Terrain, x: number, fromY = 0): number {
+  for (let y = Math.max(0, Math.round(fromY)); y < terrain.height; y++) {
     if (isSolid(terrain, x, y)) return y;
   }
   return terrain.height;
@@ -338,4 +484,5 @@ export function carveCircle(terrain: Terrain, cx: number, cy: number, radius: nu
       }
     }
   }
+  terrain.dirty = true;
 }

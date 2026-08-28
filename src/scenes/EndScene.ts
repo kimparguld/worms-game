@@ -3,10 +3,12 @@ import { drawSky } from '../render.js';
 
 interface EndSceneData {
   winner?: string;
+  winnerName?: string;
 }
 
 export class EndScene extends Phaser.Scene {
   private winner = '';
+  private winnerName = '';
 
   constructor() {
     super('EndScene');
@@ -14,6 +16,7 @@ export class EndScene extends Phaser.Scene {
 
   init(data: EndSceneData): void {
     this.winner = data.winner ?? 'draw';
+    this.winnerName = data.winnerName ?? this.winner.toUpperCase();
   }
 
   create(): void {
@@ -27,7 +30,7 @@ export class EndScene extends Phaser.Scene {
 
     const winnerColors: Record<string, string> = { p1: '#2fbfae', p2: '#e85d75' };
     const labelColor = winnerColors[this.winner] ?? '#fff8e7';
-    const label = this.winner === 'draw' ? "It's a draw!" : `${this.winner.toUpperCase()} wins!`;
+    const label = this.winner === 'draw' ? "It's a draw!" : `${this.winnerName} wins!`;
 
     this.add
       .text(centerX, centerY - 30, label, {
