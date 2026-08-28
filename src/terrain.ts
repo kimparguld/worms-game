@@ -1,26 +1,76 @@
 import type { Terrain } from './types.js';
 
-// Positions (as a fraction of width) where a raised plateau is carved into
-// the hill, creating a near-vertical wall face on each side - the ninja
-// rope needs a wall to grapple onto, and the base sine-wave silhouette is
-// otherwise a single smooth slope with nothing vertical anywhere.
-const CLIFF_SPOTS = [0.35, 0.62];
-const CLIFF_WIDTH_FRACTION = 0.06;
-const CLIFF_RISE_FRACTION = 0.22;
+// Mountain silhouette: a base flat line plus a few random sine "octaves"
+// summed together, so each match gets a differently-shaped mountain range
+// instead of one fixed hill. Amplitudes are kept small enough that ground
+// height always stays well within [0, height] - the cliff/building rise
+// math below depends on that bound to guarantee a real jump/rise.
+const MOUNTAIN_OCTAVES = [
+  { minAmplitudeFraction: 0.05, maxAmplitudeFraction: 0.09, minFrequency: 1, maxFrequency: 2 },
+  { minAmplitudeFraction: 0.02, maxAmplitudeFraction: 0.04, minFrequency: 2, maxFrequency: 4 },
+  { minAmplitudeFraction: 0.01, maxAmplitudeFraction: 0.02, minFrequency: 4, maxFrequency: 7 },
+];
+
+const CLIFF_WIDTH_FRACTION = 0.04;
+const CLIFF_RISE_MIN_FRACTION = 0.25;
+const CLIFF_RISE_MAX_FRACTION = 0.35;
+const MAX_GROUND_HEIGHT_FRACTION = 0.95;
+
+function randomBetween(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+function randomInt(min: number, max: number): number {
+  return Math.floor(randomBetween(min, max + 1));
+}
+
+function computeMountainHeights(width: number, height: number): Float64Array {
+  const heights = new Float64Array(width);
+  const octaves = MOUNTAIN_OCTAVES.map((o) => ({
+    amplitude: randomBetween(o.minAmplitudeFraction, o.maxAmplitudeFraction) * height,
+    frequency: randomBetween(o.minFrequency, o.maxFrequency),
+    phase: randomBetween(0, Math.PI * 2),
+  }));
+  for (let x = 0; x < width; x++) {
+    let offset = 0;
+    for (const oct of octaves) {
+      offset += Math.sin((x / width) * Math.PI * 2 * oct.frequency + oct.phase) * oct.amplitude;
+    }
+    heights[x] = height * 0.5 + offset;
+  }
+  return heights;
+}
+
+// Carves a near-vertical wall face into the mountain so the ninja rope has
+// something to grapple onto - a smooth sine silhouette alone has no
+// vertical surfaces anywhere. The rise is computed relative to the actual
+// natural height just outside the cliff's own span (not the cliff's own
+// center point), so the resulting jump at the cliff's edge is guaranteed to
+// be at least `riseFraction * height`, regardless of how the mountain
+// happens to slope through that span.
+function applyCliff(heights: Float64Array, width: number, height: number, centerFraction: number): void {
+  const centerX = Math.round(width * centerFraction);
+  const halfWidth = Math.max(1, Math.round((width * CLIFF_WIDTH_FRACTION) / 2));
+  const minX = Math.max(0, centerX - halfWidth);
+  const maxX = Math.min(width - 1, centerX + halfWidth);
+  const leftBoundaryX = Math.max(0, minX - 1);
+  const rightBoundaryX = Math.min(width - 1, maxX + 1);
+  const boundaryHeight = Math.max(heights[leftBoundaryX], heights[rightBoundaryX]);
+  const riseFraction = randomBetween(CLIFF_RISE_MIN_FRACTION, CLIFF_RISE_MAX_FRACTION);
+  const raisedHeight = Math.min(height * MAX_GROUND_HEIGHT_FRACTION, boundaryHeight + height * riseFraction);
+  for (let x = minX; x <= maxX; x++) heights[x] = raisedHeight;
+}
+
+function applyCliffs(heights: Float64Array, width: number, height: number): void {
+  // Two disjoint fraction ranges so a second cliff (if any) can never
+  // overlap the first and corrupt its boundary-height reference.
+  applyCliff(heights, width, height, randomBetween(0.15, 0.45));
+  if (randomInt(1, 2) === 2) applyCliff(heights, width, height, randomBetween(0.55, 0.85));
+}
 
 function computeGroundHeights(width: number, height: number): Float64Array {
-  const heights = new Float64Array(width);
-  for (let x = 0; x < width; x++) {
-    heights[x] = height * 0.5 + Math.sin((x / width) * Math.PI * 2) * height * 0.15;
-  }
-  for (const spot of CLIFF_SPOTS) {
-    const centerX = Math.round(width * spot);
-    const halfWidth = Math.max(1, Math.round((width * CLIFF_WIDTH_FRACTION) / 2));
-    const raisedHeight = Math.min(height * 0.92, heights[centerX] + height * CLIFF_RISE_FRACTION);
-    for (let x = Math.max(0, centerX - halfWidth); x <= Math.min(width - 1, centerX + halfWidth); x++) {
-      heights[x] = raisedHeight;
-    }
-  }
+  const heights = computeMountainHeights(width, height);
+  applyCliffs(heights, width, height);
   return heights;
 }
 

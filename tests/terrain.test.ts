@@ -31,6 +31,19 @@ describe('generateSilhouetteMask cliffs', () => {
   });
 });
 
+describe('generateSilhouetteMask mountains', () => {
+  it('produces a different silhouette on repeated calls (randomized, not fixed)', () => {
+    const width = 300, height = 200;
+    const maskA = generateSilhouetteMask(width, height);
+    const maskB = generateSilhouetteMask(width, height);
+    let differences = 0;
+    for (let i = 0; i < maskA.length; i++) {
+      if (maskA[i] !== maskB[i]) differences++;
+    }
+    expect(differences).toBeGreaterThan(0);
+  });
+});
+
 describe('isSolid', () => {
   it('returns true only where the mask is 1', () => {
     const terrain = createTerrain(10, 10);
