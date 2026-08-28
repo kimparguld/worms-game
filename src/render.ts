@@ -435,9 +435,14 @@ export function teamHealthFraction(team: Team): number {
   return totalHp / maxHp;
 }
 
-const TEAM_BAR_WIDTH = 220;
+export const TEAM_BAR_WIDTH = 220;
 const TEAM_BAR_HEIGHT = 16;
-const TEAM_BAR_MARGIN = 16;
+const TEAM_BAR_MARGIN = 16; // horizontal inset from the screen edge
+const TEAM_BAR_TOP = 30; // leaves room above the bar for the team-name label
+
+export function teamHealthBarX(index: number, canvasWidth: number): number {
+  return index === 0 ? TEAM_BAR_MARGIN : canvasWidth - TEAM_BAR_MARGIN - TEAM_BAR_WIDTH;
+}
 
 // One life bar per team across the top of the screen: the first team's bar
 // is left-aligned, the second team's is right-aligned. This project always
@@ -445,8 +450,8 @@ const TEAM_BAR_MARGIN = 16;
 // two-slot left/right layout is sufficient.
 export function drawTeamHealthBars(graphics: Phaser.GameObjects.Graphics, teams: Team[], canvasWidth: number): void {
   teams.forEach((team, index) => {
-    const x = index === 0 ? TEAM_BAR_MARGIN : canvasWidth - TEAM_BAR_MARGIN - TEAM_BAR_WIDTH;
-    const y = TEAM_BAR_MARGIN;
+    const x = teamHealthBarX(index, canvasWidth);
+    const y = TEAM_BAR_TOP;
     const fraction = teamHealthFraction(team);
     const color = TEAM_COLORS[team.playerId] ?? 0xdddddd;
 

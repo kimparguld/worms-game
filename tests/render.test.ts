@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel,
-  fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale,
+  fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale, teamHealthBarX,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
@@ -151,5 +151,15 @@ describe('deathWiggleScale', () => {
       expect(scale).toBeGreaterThanOrEqual(0.84);
       expect(scale).toBeLessThanOrEqual(1.16);
     }
+  });
+});
+
+describe('teamHealthBarX', () => {
+  it('left-aligns the first team', () => {
+    expect(teamHealthBarX(0, 960)).toBe(16);
+  });
+
+  it('right-aligns the second team', () => {
+    expect(teamHealthBarX(1, 960)).toBe(960 - 16 - 220);
   });
 });
