@@ -44,13 +44,27 @@ describe('generateSilhouetteMask mountains', () => {
   });
 });
 
+describe('generateSilhouetteMask buildings', () => {
+  it('marks at least one column as building material (mask value 2)', () => {
+    const mask = generateSilhouetteMask(300, 200);
+    expect(Array.from(mask)).toContain(2);
+  });
+});
+
 describe('isSolid', () => {
-  it('returns true only where the mask is 1', () => {
+  it('returns true where the mask is non-zero (ground or building)', () => {
     const terrain = createTerrain(10, 10);
     terrain.mask.fill(0);
     terrain.mask[5 * 10 + 5] = 1;
     expect(isSolid(terrain, 5, 5)).toBe(true);
     expect(isSolid(terrain, 6, 5)).toBe(false);
+  });
+
+  it('treats mask value 2 (building) as solid too', () => {
+    const terrain = createTerrain(10, 10);
+    terrain.mask.fill(0);
+    terrain.mask[5 * 10 + 5] = 2;
+    expect(isSolid(terrain, 5, 5)).toBe(true);
   });
 
   it('treats out-of-bounds coordinates as not solid', () => {

@@ -16,6 +16,13 @@ const CLIFF_RISE_MIN_FRACTION = 0.25;
 const CLIFF_RISE_MAX_FRACTION = 0.35;
 const MAX_GROUND_HEIGHT_FRACTION = 0.95;
 
+const BUILDING_COUNT_MIN = 2;
+const BUILDING_COUNT_MAX = 3;
+const BUILDING_WIDTH_MIN_FRACTION = 0.05;
+const BUILDING_WIDTH_MAX_FRACTION = 0.09;
+const BUILDING_RISE_MIN_FRACTION = 0.28;
+const BUILDING_RISE_MAX_FRACTION = 0.45;
+
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
@@ -74,13 +81,53 @@ function computeGroundHeights(width: number, height: number): Float64Array {
   return heights;
 }
 
+// Adds flat-roofed building plateaus on top of the mountain silhouette,
+// returning the set of columns that are building material (mask value 2,
+// rendered with a distinct roof/wall palette in drawTerrain) rather than
+// plain ground (mask value 1).
+function applyBuildings(heights: Float64Array, width: number, height: number): Set<number> {
+  const buildingColumns = new Set<number>();
+  const count = randomInt(BUILDING_COUNT_MIN, BUILDING_COUNT_MAX);
+  for (let i = 0; i < count; i++) {
+    const buildingWidth = Math.max(
+      1,
+      Math.round(randomBetween(width * BUILDING_WIDTH_MIN_FRACTION, width * BUILDING_WIDTH_MAX_FRACTION)),
+    );
+    const startX = Math.round(randomBetween(0, Math.max(0, width - buildingWidth)));
+    const minX = Math.max(0, startX);
+    const maxX = Math.min(width - 1, startX + buildingWidth);
+
+    let naturalMax = 0;
+    for (let x = minX; x <= maxX; x++) naturalMax = Math.max(naturalMax, heights[x]);
+    const riseFraction = randomBetween(BUILDING_RISE_MIN_FRACTION, BUILDING_RISE_MAX_FRACTION);
+    const roofHeight = Math.min(height * MAX_GROUND_HEIGHT_FRACTION, naturalMax + height * riseFraction);
+
+    for (let x = minX; x <= maxX; x++) {
+      heights[x] = roofHeight;
+      buildingColumns.add(x);
+    }
+  }
+  return buildingColumns;
+}
+
 export function generateSilhouetteMask(width: number, height: number): Uint8Array {
   const mask = new Uint8Array(width * height);
   const heights = computeGroundHeights(width, height);
+  const naturalHeights = heights.slice();
+  const buildingColumns = applyBuildings(heights, width, height);
+
   for (let x = 0; x < width; x++) {
     const groundHeight = heights[x];
+    const isBuildingColumn = buildingColumns.has(x);
+    const naturalHeight = naturalHeights[x];
     for (let y = 0; y < height; y++) {
-      mask[y * width + x] = y >= height - groundHeight ? 1 : 0;
+      if (y < height - groundHeight) {
+        mask[y * width + x] = 0;
+      } else if (isBuildingColumn && y < height - naturalHeight) {
+        mask[y * width + x] = 2;
+      } else {
+        mask[y * width + x] = 1;
+      }
     }
   }
   return mask;
@@ -94,7 +141,7 @@ export function isSolid(terrain: Terrain, x: number, y: number): boolean {
   const xi = Math.round(x);
   const yi = Math.round(y);
   if (xi < 0 || xi >= terrain.width || yi < 0 || yi >= terrain.height) return false;
-  return terrain.mask[yi * terrain.width + xi] === 1;
+  return terrain.mask[yi * terrain.width + xi] !== 0;
 }
 
 export function findSurfaceY(terrain: Terrain, x: number): number {
