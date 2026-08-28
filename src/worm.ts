@@ -96,5 +96,7 @@ export function updateWormPhysics(worm: Worm, terrain: Terrain, input: WormInput
   if (worm.y > terrain.height + 50) {
     worm.alive = false;
     worm.hp = 0;
+    worm.dying = false;
+    worm.deathTimer = null;
   }
 }
