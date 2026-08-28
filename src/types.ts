@@ -57,7 +57,9 @@ export interface InputState {
   selectedWeapon: number;
 }
 
-export type WeaponKey = 'bazooka' | 'grenade' | 'shotgun' | 'ninjaRope' | 'dynamite';
+export type WeaponKey =
+  | 'bazooka' | 'grenade' | 'shotgun' | 'ninjaRope' | 'dynamite'
+  | 'sniperRifle' | 'airstrikeRocket' | 'holyHandGrenade' | 'mine' | 'grapplingHook';
 
 export interface WeaponDef {
   key: WeaponKey;
@@ -73,6 +75,7 @@ export interface WeaponDef {
   hitscan: boolean;
   pellets: number;
   bounces: boolean;
+  rope: boolean;
   range?: number;
 }
 

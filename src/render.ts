@@ -536,6 +536,11 @@ const PROJECTILE_COLORS: Record<WeaponKey, number> = {
   shotgun: 0xffd966,
   ninjaRope: 0x8d6e63,
   dynamite: 0xd7263d,
+  sniperRifle: 0x2e2e38,
+  airstrikeRocket: 0x4fc3f7,
+  holyHandGrenade: 0xffd700,
+  mine: 0x37474f,
+  grapplingHook: 0x8d6e63,
 };
 
 const FUSE_BLINK_START_HZ = 1.5;
@@ -692,6 +697,11 @@ const WEAPON_LABELS: Record<WeaponKey, string> = {
   shotgun: 'Shotgun',
   ninjaRope: 'Ninja Rope',
   dynamite: 'Dynamite',
+  sniperRifle: 'Sniper Rifle',
+  airstrikeRocket: 'Airstrike Rocket',
+  holyHandGrenade: 'Holy Hand Grenade',
+  mine: 'Mine',
+  grapplingHook: 'Grappling Hook',
 };
 
 export function weaponLabel(selectedWeapon: number): string {

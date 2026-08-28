@@ -5,27 +5,52 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   bazooka: {
     key: 'bazooka', maxDamage: 60, blastRadius: 40, craterRadius: 40,
     chargeable: true, minSpeed: 250, maxSpeed: 1100,
-    gravity: true, windAffected: true, fuseTime: null, hitscan: false, pellets: 0, bounces: false,
+    gravity: true, windAffected: true, fuseTime: null, hitscan: false, pellets: 0, bounces: false, rope: false,
   },
   grenade: {
     key: 'grenade', maxDamage: 50, blastRadius: 45, craterRadius: 45,
     chargeable: true, minSpeed: 150, maxSpeed: 800,
-    gravity: true, windAffected: true, fuseTime: 4.5, hitscan: false, pellets: 0, bounces: true,
+    gravity: true, windAffected: true, fuseTime: 4.5, hitscan: false, pellets: 0, bounces: true, rope: false,
   },
   shotgun: {
     key: 'shotgun', maxDamage: 25, blastRadius: 0, craterRadius: 0,
     chargeable: false, minSpeed: 0, maxSpeed: 0,
-    gravity: false, windAffected: false, fuseTime: null, hitscan: true, pellets: 2, bounces: false, range: 500,
+    gravity: false, windAffected: false, fuseTime: null, hitscan: true, pellets: 2, bounces: false, rope: false, range: 500,
   },
   ninjaRope: {
     key: 'ninjaRope', maxDamage: 0, blastRadius: 0, craterRadius: 0,
     chargeable: false, minSpeed: 500, maxSpeed: 500,
-    gravity: false, windAffected: false, fuseTime: null, hitscan: false, pellets: 0, bounces: false,
+    gravity: false, windAffected: false, fuseTime: null, hitscan: false, pellets: 0, bounces: false, rope: true, range: 300,
   },
   dynamite: {
     key: 'dynamite', maxDamage: 75, blastRadius: 60, craterRadius: 60,
     chargeable: false, minSpeed: 0, maxSpeed: 0,
-    gravity: true, windAffected: false, fuseTime: 5, hitscan: false, pellets: 0, bounces: false,
+    gravity: true, windAffected: false, fuseTime: 5, hitscan: false, pellets: 0, bounces: false, rope: false,
+  },
+  sniperRifle: {
+    key: 'sniperRifle', maxDamage: 45, blastRadius: 0, craterRadius: 0,
+    chargeable: false, minSpeed: 0, maxSpeed: 0,
+    gravity: false, windAffected: false, fuseTime: null, hitscan: true, pellets: 1, bounces: false, rope: false, range: 1000,
+  },
+  airstrikeRocket: {
+    key: 'airstrikeRocket', maxDamage: 50, blastRadius: 35, craterRadius: 35,
+    chargeable: true, minSpeed: 400, maxSpeed: 1300,
+    gravity: false, windAffected: false, fuseTime: null, hitscan: false, pellets: 0, bounces: false, rope: false,
+  },
+  holyHandGrenade: {
+    key: 'holyHandGrenade', maxDamage: 95, blastRadius: 80, craterRadius: 80,
+    chargeable: true, minSpeed: 150, maxSpeed: 650,
+    gravity: true, windAffected: true, fuseTime: 6, hitscan: false, pellets: 0, bounces: true, rope: false,
+  },
+  mine: {
+    key: 'mine', maxDamage: 70, blastRadius: 55, craterRadius: 55,
+    chargeable: false, minSpeed: 0, maxSpeed: 0,
+    gravity: true, windAffected: false, fuseTime: 10, hitscan: false, pellets: 0, bounces: false, rope: false,
+  },
+  grapplingHook: {
+    key: 'grapplingHook', maxDamage: 0, blastRadius: 0, craterRadius: 0,
+    chargeable: false, minSpeed: 500, maxSpeed: 500,
+    gravity: false, windAffected: false, fuseTime: null, hitscan: false, pellets: 0, bounces: false, rope: true, range: 500,
   },
 };
 

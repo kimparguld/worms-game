@@ -4,10 +4,50 @@ import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 
 describe('WEAPONS', () => {
-  it('defines exactly the five spec weapons', () => {
+  it('defines exactly the ten spec weapons', () => {
     expect(Object.keys(WEAPONS).sort()).toEqual(
-      ['bazooka', 'dynamite', 'grenade', 'ninjaRope', 'shotgun'].sort()
+      [
+        'bazooka', 'dynamite', 'grenade', 'ninjaRope', 'shotgun',
+        'sniperRifle', 'airstrikeRocket', 'holyHandGrenade', 'mine', 'grapplingHook',
+      ].sort(),
     );
+  });
+});
+
+describe('WEAPONS new arsenal', () => {
+  it('gives the sniper rifle a precise long-range hitscan shot with no blast', () => {
+    expect(WEAPONS.sniperRifle.hitscan).toBe(true);
+    expect(WEAPONS.sniperRifle.pellets).toBe(1);
+    expect(WEAPONS.sniperRifle.blastRadius).toBe(0);
+    expect(WEAPONS.sniperRifle.range).toBe(1000);
+  });
+
+  it('makes the airstrike rocket fly straight, unaffected by gravity or wind', () => {
+    expect(WEAPONS.airstrikeRocket.gravity).toBe(false);
+    expect(WEAPONS.airstrikeRocket.windAffected).toBe(false);
+    expect(WEAPONS.airstrikeRocket.chargeable).toBe(true);
+  });
+
+  it('gives the holy hand grenade a bigger blast and longer fuse than a regular grenade', () => {
+    expect(WEAPONS.holyHandGrenade.maxDamage).toBeGreaterThan(WEAPONS.grenade.maxDamage);
+    expect(WEAPONS.holyHandGrenade.blastRadius).toBeGreaterThan(WEAPONS.grenade.blastRadius);
+    expect(WEAPONS.holyHandGrenade.fuseTime).toBeGreaterThan(WEAPONS.grenade.fuseTime!);
+  });
+
+  it('drops the mine straight down with a long fuse instead of throwing it', () => {
+    expect(WEAPONS.mine.minSpeed).toBe(0);
+    expect(WEAPONS.mine.maxSpeed).toBe(0);
+    expect(WEAPONS.mine.fuseTime).toBe(10);
+  });
+
+  it('gives the grappling hook a longer cast range than the ninja rope', () => {
+    expect(WEAPONS.grapplingHook.rope).toBe(true);
+    expect(WEAPONS.grapplingHook.range).toBeGreaterThan(WEAPONS.ninjaRope.range!);
+  });
+
+  it('flags exactly the two rope weapons and no others', () => {
+    const ropeWeapons = Object.values(WEAPONS).filter((w) => w.rope).map((w) => w.key).sort();
+    expect(ropeWeapons).toEqual(['grapplingHook', 'ninjaRope']);
   });
 });
 
