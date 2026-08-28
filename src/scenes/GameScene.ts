@@ -17,12 +17,19 @@ import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
 import { TURN_BANNER_DURATION_MS } from '../constants.js';
 import { soundSystem } from '../sound.js';
+import { aimWormAtPoint, isMobileDevice } from '../mobile.js';
 import type { Worm, MatchRuntime } from '../types.js';
 
 interface GameSceneData {
   team1Name?: string;
   team2Name?: string;
 }
+
+const MOBILE_WORM_DRAG_RADIUS = 96;
+const MOBILE_MOVEMENT_ZONE_WIDTH_FRACTION = 0.35;
+const MOBILE_MOVEMENT_ZONE_MIN_Y_FRACTION = 0.45;
+const MOBILE_MOVE_DEAD_ZONE = 18;
+const MOBILE_JUMP_DRAG_DISTANCE = 42;
 
 export class GameScene extends Phaser.Scene {
   private rt!: MatchRuntime;
@@ -53,6 +60,10 @@ export class GameScene extends Phaser.Scene {
   private burstedShotgunTracers = new WeakSet<object>();
   private bannerWasVisible = false;
   private wasCharging = false;
+  private movementPointerId: number | null = null;
+  private firingPointerId: number | null = null;
+  private movementStartX = 0;
+  private movementStartY = 0;
   // Counts down in triggerMovementDust; only one worm can act per turn, so
   // a single shared cooldown (rather than one per worm) is enough to keep
   // footstep puffs from firing every single frame while walking.
@@ -70,6 +81,7 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     resetInputState(sharedInput);
     this.input.once('pointerdown', () => this.unlockAudio());
+    this.input.once('pointerdown', () => this.enterMobileFullscreen());
     this.input.keyboard?.once('keydown', () => this.unlockAudio());
 
     const { width, height } = this.scale;
@@ -158,6 +170,8 @@ export class GameScene extends Phaser.Scene {
     }
     this.activeWormGlow = this.add.image(0, 0, 'glowHalo').setTint(0xffd966).setBlendMode(Phaser.BlendModes.ADD);
 
+    this.createMobileTouchControls();
+
     // A faint darkened edge to frame the arena, not a heavy vignette - it
     // should read as depth, not as a filter someone forgot to remove.
     this.cameras.main.filters.internal.addVignette(0.5, 0.5, 1.0, 0.25);
@@ -166,7 +180,89 @@ export class GameScene extends Phaser.Scene {
     // (on restart, or when EndScene takes over) instead of leaking it.
     this.events.once('shutdown', () => {
       if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
+      this.clearMobileTouchState();
     });
+  }
+
+  private createMobileTouchControls(): void {
+    if (!isMobileDevice()) return;
+    this.input.addPointer(2);
+    this.input.on('pointerdown', this.handlePointerDown, this);
+    this.input.on('pointermove', this.handlePointerMove, this);
+    this.input.on('pointerup', this.handlePointerUp, this);
+    this.input.on('pointerupoutside', this.handlePointerUp, this);
+  }
+
+  private handlePointerDown(pointer: Phaser.Input.Pointer): void {
+    if (this.rt.turnBannerTimer !== null) return;
+    const worm = currentWorm(this.rt.match).worm;
+    if (this.isMovementPointer(pointer, worm) && this.movementPointerId === null) {
+      this.movementPointerId = pointer.pointerId;
+      this.movementStartX = pointer.x;
+      this.movementStartY = pointer.y;
+      this.updateMovementFromPointer(pointer);
+      return;
+    }
+
+    if (this.firingPointerId !== null) return;
+    this.firingPointerId = pointer.pointerId;
+    sharedInput.selectedWeapon = 1;
+    sharedInput.firing = true;
+    aimWormAtPoint(worm, pointer.x, pointer.y);
+  }
+
+  private handlePointerMove(pointer: Phaser.Input.Pointer): void {
+    if (pointer.pointerId === this.movementPointerId) {
+      this.updateMovementFromPointer(pointer);
+      return;
+    }
+
+    if (pointer.pointerId !== this.firingPointerId) return;
+    aimWormAtPoint(currentWorm(this.rt.match).worm, pointer.x, pointer.y);
+  }
+
+  private handlePointerUp(pointer: Phaser.Input.Pointer): void {
+    if (pointer.pointerId === this.movementPointerId) {
+      this.movementPointerId = null;
+      sharedInput.left = false;
+      sharedInput.right = false;
+      sharedInput.jump = false;
+      return;
+    }
+
+    if (pointer.pointerId !== this.firingPointerId) return;
+    this.firingPointerId = null;
+    sharedInput.firing = false;
+  }
+
+  private updateMovementFromPointer(pointer: Phaser.Input.Pointer): void {
+    const deltaX = pointer.x - this.movementStartX;
+    const deltaY = pointer.y - this.movementStartY;
+    sharedInput.left = deltaX < -MOBILE_MOVE_DEAD_ZONE;
+    sharedInput.right = deltaX > MOBILE_MOVE_DEAD_ZONE;
+    sharedInput.jump = deltaY < -MOBILE_JUMP_DRAG_DISTANCE;
+  }
+
+  private isMovementPointer(pointer: Phaser.Input.Pointer, worm: Worm): boolean {
+    const nearActiveWorm = Math.hypot(pointer.x - worm.x, pointer.y - worm.y) <= MOBILE_WORM_DRAG_RADIUS;
+    const inMovementZone =
+      pointer.x <= this.scale.width * MOBILE_MOVEMENT_ZONE_WIDTH_FRACTION &&
+      pointer.y >= this.scale.height * MOBILE_MOVEMENT_ZONE_MIN_Y_FRACTION;
+    return nearActiveWorm || inMovementZone;
+  }
+
+  private clearMobileTouchState(): void {
+    this.movementPointerId = null;
+    this.firingPointerId = null;
+    sharedInput.left = false;
+    sharedInput.right = false;
+    sharedInput.jump = false;
+    sharedInput.firing = false;
+  }
+
+  private enterMobileFullscreen(): void {
+    if (!isMobileDevice() || this.scale.isFullscreen) return;
+    this.scale.startFullscreen();
   }
 
   // One shared 8x8 white dot texture, tinted per-emitter - cheaper than a
@@ -346,6 +442,6 @@ export class GameScene extends Phaser.Scene {
 
   private unlockAudio(): void {
     soundSystem.unlock();
-    soundSystem.startTheme();
+    soundSystem.startBackgroundMusic();
   }
 }

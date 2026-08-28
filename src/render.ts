@@ -1,13 +1,27 @@
 import type Phaser from 'phaser';
 import {
-  STARTING_HP, DEATH_ANIM_DURATION_MS, SHOTGUN_TRACER_DURATION, WORM_MOVE_SPEED,
-  EXPLOSION_EFFECT_DURATION, SPLASH_EFFECT_DURATION, WATER_BAND_HEIGHT_FRACTION,
+  STARTING_HP,
+  DEATH_ANIM_DURATION_MS,
+  SHOTGUN_TRACER_DURATION,
+  WORM_MOVE_SPEED,
+  EXPLOSION_EFFECT_DURATION,
+  SPLASH_EFFECT_DURATION,
+  WATER_BAND_HEIGHT_FRACTION,
 } from './constants.js';
 import { WEAPON_KEYS } from './matchLoop.js';
 import { WEAPONS } from './weapons.js';
 import type {
-  Terrain, Worm, Projectile, MatchState, Rope, WeaponKey, Team, Gravestone, ShotgunTracer,
-  Explosion, Splash,
+  Terrain,
+  Worm,
+  Projectile,
+  MatchState,
+  Rope,
+  WeaponKey,
+  Team,
+  Gravestone,
+  ShotgunTracer,
+  Explosion,
+  Splash,
 } from './types.js';
 
 let cachedImageData: ImageData | null = null;
@@ -16,9 +30,236 @@ let cachedBuildingRunLength: Int32Array | null = null;
 let cachedWidth = 0;
 let cachedHeight = 0;
 
-const GRASS_DEPTH = 5;
-const DIRT_TRANSITION_DEPTH = 45;
 const BUILDING_ROOF_DEPTH = 6;
+
+const TERRAIN_HASH_UNIT = 255;
+const GRASS_RIM_DEPTH = 2;
+const GRASS_BODY_DEPTH = 8;
+const TOPSOIL_DEPTH = 38;
+const CLAY_DEPTH = 85;
+const SURFACE_TUFT_MAX_HEIGHT = 4;
+const SHORELINE_FOAM_RANGE = 9;
+const SHORELINE_FOAM_SPARSITY = 92;
+const SUN_DIRECTION_X = -0.55;
+const SUN_DIRECTION_Y = -0.83;
+
+interface ColorRgba {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+export interface TerrainMaterialColorInput {
+  material: 1 | 2;
+  x: number;
+  y: number;
+  depth: number;
+  rowRunStartX?: number;
+  atLeftEdge?: boolean;
+  atRightEdge?: boolean;
+  nearBase?: boolean;
+  inWindow?: boolean;
+  windowCellX?: number;
+  windowCellY?: number;
+  buildingSeed?: number;
+  hasEmptyLeft?: boolean;
+  hasEmptyRight?: boolean;
+  hasEmptyAbove?: boolean;
+  hasEmptyBelow?: boolean;
+}
+
+function clampColor(value: number): number {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function color(r: number, g: number, b: number, a = 255): ColorRgba {
+  return { r: clampColor(r), g: clampColor(g), b: clampColor(b), a };
+}
+
+function adjustColor(base: ColorRgba, delta: number): ColorRgba {
+  return color(base.r + delta, base.g + delta, base.b + delta, base.a);
+}
+
+function mixColor(a: ColorRgba, b: ColorRgba, amount: number): ColorRgba {
+  const t = Math.max(0, Math.min(1, amount));
+  return color(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
+
+function applyMaterialLighting(base: ColorRgba, input: TerrainMaterialColorInput, roughness: number): ColorRgba {
+  let lit = base;
+  const openLeft = input.hasEmptyLeft ? 1 : 0;
+  const openRight = input.hasEmptyRight ? 1 : 0;
+  const openAbove = input.hasEmptyAbove ? 1 : 0;
+  const openBelow = input.hasEmptyBelow ? 1 : 0;
+  const normalX = openLeft - openRight;
+  const normalY = openAbove - openBelow;
+  const normalLength = Math.hypot(normalX, normalY);
+  if (normalLength > 0) {
+    const light = (normalX / normalLength) * SUN_DIRECTION_X + (normalY / normalLength) * SUN_DIRECTION_Y;
+    lit = adjustColor(lit, light * 34 * roughness);
+  }
+  if (input.hasEmptyLeft || input.hasEmptyRight || input.hasEmptyBelow) lit = adjustColor(lit, -18 * roughness);
+  if (input.hasEmptyAbove) lit = mixColor(lit, color(255, 246, 208), 0.14 * roughness);
+  return lit;
+}
+
+export function terrainPixelHash(x: number, y: number, seed: number): number {
+  let h = (x * 73856093) ^ (y * 19349663) ^ (seed * 83492791);
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  return h & TERRAIN_HASH_UNIT;
+}
+
+function earthBaseColor(depth: number): ColorRgba {
+  if (depth <= GRASS_RIM_DEPTH) return color(156, 213, 96);
+  if (depth <= GRASS_BODY_DEPTH) return color(72, 151, 62);
+  if (depth <= TOPSOIL_DEPTH) return color(112, 78, 47);
+  if (depth <= CLAY_DEPTH) return color(139, 91, 57);
+  return color(79, 72, 67);
+}
+
+function earthMaterialColor(input: TerrainMaterialColorInput): ColorRgba {
+  const { x, y, depth } = input;
+  const speckle = terrainPixelHash(x, y, depth);
+  const fineNoise = (speckle - 127) / 127;
+  const strata = Math.sin(depth * 0.22 + x * 0.018) + Math.sin(depth * 0.08 + x * 0.071) * 0.55;
+  const root =
+    terrainPixelHash(Math.floor(x / 3), Math.floor(y / 6), 131) > 245 &&
+    depth > GRASS_BODY_DEPTH &&
+    depth < TOPSOIL_DEPTH;
+  const stone = terrainPixelHash(Math.floor(x / 4), Math.floor(y / 4), 211) > 248 && depth > TOPSOIL_DEPTH;
+  let base = earthBaseColor(depth);
+
+  if (depth <= GRASS_RIM_DEPTH) {
+    base = mixColor(base, color(212, 237, 126), speckle > 150 ? 0.45 : 0.12);
+  } else if (depth <= GRASS_BODY_DEPTH) {
+    base = adjustColor(base, fineNoise * 18 + strata * 5);
+  } else if (depth <= TOPSOIL_DEPTH) {
+    base = adjustColor(base, fineNoise * 19 + strata * 8);
+    if (root) base = color(58, 44, 28);
+    if (speckle > 238) base = mixColor(base, color(46, 35, 25), 0.55);
+  } else if (depth <= CLAY_DEPTH) {
+    base = adjustColor(base, fineNoise * 18 + strata * 11);
+    if (speckle > 232) base = mixColor(base, color(188, 126, 75), 0.45);
+  } else {
+    base = adjustColor(base, fineNoise * 13 + strata * 8);
+    if (speckle > 228) base = mixColor(base, color(132, 125, 116), 0.42);
+  }
+
+  if (stone) base = mixColor(base, color(128, 124, 116), 0.75);
+  if (depth === TOPSOIL_DEPTH || depth === CLAY_DEPTH) base = mixColor(base, color(54, 44, 37), 0.28);
+
+  return applyMaterialLighting(base, input, 1);
+}
+
+function buildingMaterialColor(input: TerrainMaterialColorInput): ColorRgba {
+  const depth = input.depth;
+  const rowRunStartX = input.rowRunStartX ?? 0;
+  const buildingSeed = input.buildingSeed ?? rowRunStartX;
+  const speckle = terrainPixelHash(input.x, input.y, buildingSeed);
+  const fineNoise = (speckle - 127) / 127;
+  const verticalWeathering = Math.min(1, depth / 140);
+
+  if (depth < 2)
+    return applyMaterialLighting(speckle % 2 === 0 ? color(222, 226, 229) : color(189, 196, 202), input, 0.8);
+  if (depth < BUILDING_ROOF_DEPTH)
+    return applyMaterialLighting(adjustColor(color(95, 101, 110), fineNoise * 11), input, 0.75);
+
+  if (input.inWindow) {
+    const cellX = input.windowCellX ?? 0;
+    const cellY = input.windowCellY ?? 0;
+    const lit = windowIsLit(cellX, cellY, buildingSeed);
+    const glass = mixColor(
+      color(31, 56, 73),
+      color(103, 143, 164),
+      Math.max(0, Math.min(1, cellY * 0.08 + fineNoise * 0.16)),
+    );
+    if (!lit || speckle < 28) return applyMaterialLighting(glass, input, 0.45);
+    const warmInterior = speckle > 190 ? color(255, 229, 151) : color(225, 164, 86);
+    return mixColor(warmInterior, glass, speckle < 78 ? 0.45 : 0.12);
+  }
+
+  if (input.nearBase) return applyMaterialLighting(adjustColor(color(96, 73, 62), fineNoise * 13), input, 0.85);
+  if (input.atLeftEdge || input.atRightEdge)
+    return applyMaterialLighting(adjustColor(color(108, 78, 66), fineNoise * 10), input, 0.9);
+
+  const facadeStripe = Math.floor((input.x - rowRunStartX) / 13) % 2 === 0;
+  const floorDivider = (depth - BUILDING_ROOF_DEPTH) % BUILDING_WINDOW_PITCH_Y < 2;
+  const mortarLine = (input.x - rowRunStartX) % 13 === 0 || depth % 9 === 0;
+  const rainStain = terrainPixelHash(Math.floor(input.x / 5), 0, buildingSeed) > 218;
+  let base = facadeStripe ? color(161, 109, 80) : color(137, 94, 75);
+  base = mixColor(base, color(76, 78, 82), verticalWeathering * 0.22);
+  if (floorDivider || mortarLine) base = mixColor(base, color(98, 84, 77), 0.45);
+  if (rainStain) base = adjustColor(base, -18 * verticalWeathering);
+  return applyMaterialLighting(adjustColor(base, fineNoise * 12), input, 0.82);
+}
+
+export function terrainMaterialColor(input: TerrainMaterialColorInput): ColorRgba {
+  if (input.material === 2) return buildingMaterialColor(input);
+  return earthMaterialColor(input);
+}
+
+export function surfaceDecorationHeight(x: number, surfaceY: number, seed: number): number {
+  const hash = terrainPixelHash(x, surfaceY, seed);
+  if (hash < 194) return 0;
+  return 1 + (hash % SURFACE_TUFT_MAX_HEIGHT);
+}
+
+export function isShorelinePixel(mask: Uint8Array, width: number, height: number, x: number, y: number): boolean {
+  if (x < 0 || x >= width || y < 0 || y >= height) return false;
+  if (mask[y * width + x] !== 0) return false;
+  const waterStartY = height * (1 - WATER_BAND_HEIGHT_FRACTION);
+  if (Math.abs(y - waterStartY) > SHORELINE_FOAM_RANGE) return false;
+
+  const left = x > 0 && mask[y * width + x - 1] !== 0;
+  const right = x + 1 < width && mask[y * width + x + 1] !== 0;
+  const above = y > 0 && mask[(y - 1) * width + x] !== 0;
+  const below = y + 1 < height && mask[(y + 1) * width + x] !== 0;
+  return left || right || above || below;
+}
+
+function writePixel(imageData: ImageData, width: number, x: number, y: number, value: ColorRgba): void {
+  const o = (y * width + x) * 4;
+  imageData.data[o] = value.r;
+  imageData.data[o + 1] = value.g;
+  imageData.data[o + 2] = value.b;
+  imageData.data[o + 3] = value.a;
+}
+
+function drawTerrainSurfaceDetails(imageData: ImageData, terrain: Terrain): void {
+  const { width, height, mask } = terrain;
+  for (let x = 0; x < width; x++) {
+    for (let y = 1; y < height; y++) {
+      const cell = mask[y * width + x];
+      if (cell === 0) continue;
+
+      if (cell === 1) {
+        const tuftHeight = surfaceDecorationHeight(x, y, 17);
+        for (let dy = 1; dy <= tuftHeight; dy++) {
+          const targetY = y - dy;
+          if (targetY < 0 || mask[targetY * width + x] !== 0) break;
+          writePixel(imageData, width, x, targetY, color(99, 190, 66, 220 - dy * 26));
+        }
+      }
+      break;
+    }
+  }
+}
+
+function drawShorelineFoam(imageData: ImageData, terrain: Terrain): void {
+  const { width, height, mask } = terrain;
+  const minY = Math.max(0, Math.floor(height * (1 - WATER_BAND_HEIGHT_FRACTION) - SHORELINE_FOAM_RANGE));
+  const maxY = Math.min(height - 1, Math.ceil(height * (1 - WATER_BAND_HEIGHT_FRACTION) + SHORELINE_FOAM_RANGE));
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!isShorelinePixel(mask, width, height, x, y)) continue;
+      const hash = terrainPixelHash(x, y, 71);
+      if (hash > SHORELINE_FOAM_SPARSITY) continue;
+      writePixel(imageData, width, x, y, hash % 2 === 0 ? color(220, 246, 247, 210) : color(143, 216, 247, 180));
+    }
+  }
+}
 
 // Building facade: a flat slab of one colour reads as a brown monolith, so the
 // wall is broken up into a grid of floors and windows. The grid is anchored to
@@ -77,73 +318,58 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       const atLeftEdge = dx < 2;
       const atRightEdge = x + 2 >= width || terrain.mask[i + 1] !== 2 || terrain.mask[i + 2] !== 2;
 
-      let r: number;
-      let g: number;
-      let b: number;
-      if (depth < 2) {
-        // A bright sunlit lip along the roof's edge, instead of a dark
-        // outline, so the roofline still pops without an inked look.
-        r = 214; g = 218; b = 226;
-      } else if (depth < BUILDING_ROOF_DEPTH) {
-        r = 118; g = 122; b = 132;
-      } else if (atLeftEdge || atRightEdge) {
-        // Soft warm shading (not a hard dark line) so the facade still
-        // reads as a solid volume at its corners.
-        r = 128; g = 90; b = 62;
-      } else {
-        const wy = depth - BUILDING_ROOF_DEPTH;
-        const cellX = dx % BUILDING_WINDOW_PITCH_X;
-        const cellY = wy % BUILDING_WINDOW_PITCH_Y;
-        const baseProbe = i + BUILDING_BASE_DEPTH * width;
-        const nearBase = baseProbe >= terrain.mask.length || terrain.mask[baseProbe] !== 2;
-        const inWindow =
-          !nearBase &&
-          cellX >= BUILDING_WINDOW_INSET_X &&
-          cellX < BUILDING_WINDOW_INSET_X + BUILDING_WINDOW_WIDTH &&
-          cellY >= BUILDING_WINDOW_INSET_Y &&
-          cellY < BUILDING_WINDOW_INSET_Y + BUILDING_WINDOW_HEIGHT;
-        if (inWindow) {
-          const lit = windowIsLit(
-            Math.floor(dx / BUILDING_WINDOW_PITCH_X),
-            Math.floor(wy / BUILDING_WINDOW_PITCH_Y),
-            rowRunStartX,
-          );
-          if (lit) { r = 250; g = 214; b = 137; } else { r = 92; g = 84; b = 100; }
-        } else if (cellY < 2) {
-          // Thin floor divider between window rows.
-          r = 158; g = 108; b = 76;
-        } else {
-          r = 178; g = 124; b = 88;
-        }
-      }
-      imageData.data[o] = r;
-      imageData.data[o + 1] = g;
-      imageData.data[o + 2] = b;
-      imageData.data[o + 3] = 255;
+      const wy = depth - BUILDING_ROOF_DEPTH;
+      const cellX = dx % BUILDING_WINDOW_PITCH_X;
+      const cellY = wy % BUILDING_WINDOW_PITCH_Y;
+      const baseProbe = i + BUILDING_BASE_DEPTH * width;
+      const nearBase = baseProbe >= terrain.mask.length || terrain.mask[baseProbe] !== 2;
+      const inWindow =
+        depth >= BUILDING_ROOF_DEPTH &&
+        !nearBase &&
+        cellX >= BUILDING_WINDOW_INSET_X &&
+        cellX < BUILDING_WINDOW_INSET_X + BUILDING_WINDOW_WIDTH &&
+        cellY >= BUILDING_WINDOW_INSET_Y &&
+        cellY < BUILDING_WINDOW_INSET_Y + BUILDING_WINDOW_HEIGHT;
+      const materialColor = terrainMaterialColor({
+        material: 2,
+        x,
+        y: Math.floor(i / width),
+        depth,
+        rowRunStartX,
+        atLeftEdge,
+        atRightEdge,
+        nearBase,
+        inWindow,
+        windowCellX: Math.floor(dx / BUILDING_WINDOW_PITCH_X),
+        windowCellY: Math.floor(Math.max(0, wy) / BUILDING_WINDOW_PITCH_Y),
+        buildingSeed: rowRunStartX,
+        hasEmptyLeft: x > 0 && terrain.mask[i - 1] === 0,
+        hasEmptyRight: x + 1 < width && terrain.mask[i + 1] === 0,
+        hasEmptyAbove: i - width >= 0 && terrain.mask[i - width] === 0,
+        hasEmptyBelow: i + width < terrain.mask.length && terrain.mask[i + width] === 0,
+      });
+      imageData.data[o] = materialColor.r;
+      imageData.data[o + 1] = materialColor.g;
+      imageData.data[o + 2] = materialColor.b;
+      imageData.data[o + 3] = materialColor.a;
     } else if (cell === 1) {
       buildingRunLength[x] = 0;
       runLength[x]++;
       const depth = runLength[x];
-      if (depth === 1) {
-        // A bright sunlit rim along the grass's top edge, instead of a dark
-        // outline - reads as light catching the grass tips.
-        imageData.data[o] = 168;
-        imageData.data[o + 1] = 235;
-        imageData.data[o + 2] = 110;
-      } else if (depth <= GRASS_DEPTH) {
-        imageData.data[o] = 104;
-        imageData.data[o + 1] = 214;
-        imageData.data[o + 2] = 64;
-      } else if (depth <= DIRT_TRANSITION_DEPTH) {
-        imageData.data[o] = 150;
-        imageData.data[o + 1] = 96;
-        imageData.data[o + 2] = 46;
-      } else {
-        imageData.data[o] = 96;
-        imageData.data[o + 1] = 60;
-        imageData.data[o + 2] = 30;
-      }
-      imageData.data[o + 3] = 255;
+      const materialColor = terrainMaterialColor({
+        material: 1,
+        x,
+        y: Math.floor(i / width),
+        depth,
+        hasEmptyLeft: x > 0 && terrain.mask[i - 1] === 0,
+        hasEmptyRight: x + 1 < width && terrain.mask[i + 1] === 0,
+        hasEmptyAbove: i - width >= 0 && terrain.mask[i - width] === 0,
+        hasEmptyBelow: i + width < terrain.mask.length && terrain.mask[i + width] === 0,
+      });
+      imageData.data[o] = materialColor.r;
+      imageData.data[o + 1] = materialColor.g;
+      imageData.data[o + 2] = materialColor.b;
+      imageData.data[o + 3] = materialColor.a;
     } else {
       runLength[x] = 0;
       buildingRunLength[x] = 0;
@@ -151,6 +377,8 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       imageData.data[o + 3] = 0;
     }
   }
+  drawTerrainSurfaceDetails(imageData, terrain);
+  drawShorelineFoam(imageData, terrain);
   texture.context.putImageData(imageData, 0, 0);
   texture.refresh();
 }
@@ -158,20 +386,106 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
 // Drawn once (not per frame) - the sky doesn't change during a match.
 export function drawSky(graphics: Phaser.GameObjects.Graphics, width: number, height: number): void {
   graphics.clear();
-  graphics.fillGradientStyle(0x6ec3f4, 0x6ec3f4, 0xfdecc8, 0xfdecc8, 1);
+  graphics.fillGradientStyle(0x4f9fd5, 0x8cc9e8, 0xffd9ad, 0xd79f72, 1);
   graphics.fillRect(0, 0, width, height);
+
+  graphics.fillStyle(0xffffff, 0.16);
+  graphics.fillRect(0, 0, width, height * 0.34);
+
+  graphics.fillStyle(0xfff1a8, 0.85);
+  graphics.fillCircle(width * 0.83, height * 0.16, Math.max(24, width * 0.035));
+  graphics.lineStyle(2, 0xfff1a8, 0.24);
+  for (let i = 0; i < 10; i++) {
+    const angle = (i / 10) * Math.PI * 2;
+    const inner = Math.max(34, width * 0.045);
+    const outer = Math.max(52, width * 0.07);
+    graphics.lineBetween(
+      width * 0.83 + Math.cos(angle) * inner,
+      height * 0.16 + Math.sin(angle) * inner,
+      width * 0.83 + Math.cos(angle) * outer,
+      height * 0.16 + Math.sin(angle) * outer,
+    );
+  }
+
+  graphics.fillStyle(0xffffff, 0.1);
+  for (let y = height * 0.09; y < height * 0.49; y += height * 0.075) {
+    const offset = Math.sin(y * 0.037) * width * 0.035;
+    graphics.fillRoundedRect(width * 0.06 + offset, y, width * 0.68, 2, 1);
+  }
+
+  graphics.fillStyle(0xb8d1bd, 0.26);
+  graphics.beginPath();
+  graphics.moveTo(0, height * 0.56);
+  for (let x = 0; x <= width; x += 32) {
+    const y = height * 0.5 + Math.sin(x * 0.012) * height * 0.035 + Math.sin(x * 0.027) * height * 0.018;
+    graphics.lineTo(x, y);
+  }
+  graphics.lineTo(width, height);
+  graphics.lineTo(0, height);
+  graphics.closePath();
+  graphics.fillPath();
+
+  graphics.fillStyle(0x79a790, 0.22);
+  graphics.beginPath();
+  graphics.moveTo(0, height * 0.65);
+  for (let x = 0; x <= width; x += 28) {
+    const y = height * 0.6 + Math.sin(x * 0.016 + 1.5) * height * 0.045;
+    graphics.lineTo(x, y);
+  }
+  graphics.lineTo(width, height);
+  graphics.lineTo(0, height);
+  graphics.closePath();
+  graphics.fillPath();
+
+  graphics.fillStyle(0x617f78, 0.24);
+  graphics.beginPath();
+  graphics.moveTo(0, height * 0.72);
+  for (let x = 0; x <= width; x += 34) {
+    const y = height * 0.69 + Math.sin(x * 0.018 + 2.4) * height * 0.026 + Math.sin(x * 0.043) * height * 0.01;
+    graphics.lineTo(x, y);
+  }
+  graphics.lineTo(width, height);
+  graphics.lineTo(0, height);
+  graphics.closePath();
+  graphics.fillPath();
+
+  graphics.fillStyle(0x263f46, 0.2);
+  const skylineBase = height * 0.68;
+  for (let x = 0; x < width; x += 34) {
+    const buildingHeight = 18 + ((x * 37) % 46);
+    graphics.fillRect(x, skylineBase - buildingHeight, 20 + ((x * 11) % 18), buildingHeight);
+    if (x % 68 === 0)
+      graphics.fillTriangle(
+        x + 8,
+        skylineBase - buildingHeight,
+        x + 18,
+        skylineBase - buildingHeight - 16,
+        x + 28,
+        skylineBase - buildingHeight,
+      );
+  }
+
+  graphics.fillGradientStyle(0xffffff, 0xffffff, 0xffecd1, 0xffecd1, 0.08, 0.08, 0.3, 0.3);
+  graphics.fillRect(0, height * 0.48, width, height * 0.28);
 
   const clouds: Array<[number, number, number]> = [
     [width * 0.15, height * 0.18, 1],
     [width * 0.45, height * 0.1, 0.8],
     [width * 0.72, height * 0.22, 1.1],
     [width * 0.88, height * 0.08, 0.7],
+    [width * 0.3, height * 0.3, 0.55],
+    [width * 0.62, height * 0.14, 0.48],
   ];
   graphics.fillStyle(0xffffff, 0.85);
   for (const [cx, cy, scale] of clouds) {
+    graphics.fillStyle(0x8fb7c8, 0.15);
+    graphics.fillEllipse(cx + 5 * scale, cy + 11 * scale, 72 * scale, 18 * scale);
+    graphics.fillStyle(0xffffff, 0.85);
     graphics.fillEllipse(cx, cy, 60 * scale, 26 * scale);
     graphics.fillEllipse(cx - 28 * scale, cy + 6 * scale, 38 * scale, 20 * scale);
     graphics.fillEllipse(cx + 30 * scale, cy + 6 * scale, 42 * scale, 20 * scale);
+    graphics.fillStyle(0xfff8e7, 0.55);
+    graphics.fillEllipse(cx - 12 * scale, cy - 5 * scale, 36 * scale, 12 * scale);
   }
 }
 
@@ -183,22 +497,47 @@ export function drawWater(graphics: Phaser.GameObjects.Graphics, width: number, 
   graphics.clear();
   const level = height * (1 - WATER_BAND_HEIGHT_FRACTION);
   const band = height - level;
-  graphics.fillGradientStyle(0x2e8fc7, 0x2e8fc7, 0x0c3f6e, 0x0c3f6e, 1);
+  graphics.fillGradientStyle(0x287fa8, 0x2e91bc, 0x082d4c, 0x061f3a, 1);
   graphics.fillRect(0, level, width, band);
 
+  graphics.fillStyle(0x021221, 0.16);
+  graphics.fillRect(0, level + band * 0.68, width, band * 0.32);
+
+  graphics.fillStyle(0xffffff, 0.065);
+  for (let x = -90; x < width; x += 90) {
+    const shimmerX = x + ((timeMs / 55) % 90);
+    graphics.fillTriangle(shimmerX, level + band * 0.12, shimmerX + 18, level + band * 0.12, shimmerX + 84, height);
+  }
+
   const t = timeMs / 1000;
-  const drawWave = (yOffset: number, freq: number, speed: number, amp: number, color: number, alpha: number, lineWidth: number) => {
+  const drawWave = (
+    yOffset: number,
+    freq: number,
+    speed: number,
+    amp: number,
+    color: number,
+    alpha: number,
+    lineWidth: number,
+  ) => {
     graphics.lineStyle(lineWidth, color, alpha);
     graphics.beginPath();
-    for (let x = 0; x <= width; x += 10) {
-      const y = level + yOffset + Math.sin(x * freq + t * speed) * amp;
+    for (let x = 0; x <= width; x += 8) {
+      const y =
+        level +
+        yOffset +
+        Math.sin(x * freq + t * speed) * amp +
+        Math.sin(x * freq * 0.37 - t * speed * 0.65) * amp * 0.38;
       if (x === 0) graphics.moveTo(x, y);
       else graphics.lineTo(x, y);
     }
     graphics.strokePath();
   };
+  drawWave(0, 0.035, 1.1, 3, 0xffffff, 0.4, 2.5);
   drawWave(4, 0.05, 2.2, 2.5, 0x8fd8f7, 0.55, 2);
   drawWave(10, 0.04, -1.6, 2, 0xcdeffb, 0.3, 1.5);
+  drawWave(22, 0.031, 0.9, 1.7, 0xffffff, 0.13, 1);
+  drawWave(band * 0.45, 0.026, 1.3, 3.2, 0x75c6e8, 0.2, 1.5);
+  drawWave(band * 0.72, 0.022, -1.0, 2.5, 0x0a3158, 0.22, 2);
 }
 
 // Bold, saturated palette. Form reads through flat color + soft shading
@@ -206,9 +545,10 @@ export function drawWater(graphics: Phaser.GameObjects.Graphics, width: number, 
 // outlines - a thin, low-alpha line is used only where two similarly-toned
 // shapes would otherwise merge (eyes against the head).
 const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
-const BODY_COLOR = 0xffb199;
-const BODY_SHADE_COLOR = 0xe0805a;
-const SOFT_LINE_COLOR = 0x8a4a4a;
+const BODY_COLOR = 0xd99578;
+const BODY_SHADE_COLOR = 0x8f4e3f;
+const BODY_HIGHLIGHT_COLOR = 0xf7c7ad;
+const SOFT_LINE_COLOR = 0x5f3835;
 const HEAD_RADIUS = 10;
 
 // Tapering tail segments trailing behind the head - worms crawl, they don't
@@ -268,16 +608,29 @@ function drawHeldWeapon(
   const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
 
   if (weaponKey === 'bazooka') {
-    const length = 20;
+    const length = 29;
     const endX = handX + Math.cos(fireAngle) * length;
     const endY = handY + Math.sin(fireAngle) * length;
-    graphics.lineStyle(6, 0x5c5c66, 1);
+    graphics.lineStyle(8, 0x565964, 1);
     graphics.lineBetween(handX, handY, endX, endY);
-    graphics.lineStyle(1.6, 0x3a3a42, 0.7);
-    graphics.lineBetween(handX, handY - 1.2, endX, endY - 1.2);
-    // Flared muzzle at the barrel tip
+    graphics.lineStyle(2, 0xaeb5c2, 0.55);
+    graphics.lineBetween(
+      handX - Math.sin(fireAngle) * 2,
+      handY + Math.cos(fireAngle) * 2,
+      endX - Math.sin(fireAngle) * 2,
+      endY + Math.cos(fireAngle) * 2,
+    );
+    graphics.lineStyle(3, 0x30323a, 1);
+    graphics.lineBetween(
+      handX - Math.cos(fireAngle) * 5,
+      handY - Math.sin(fireAngle) * 5,
+      handX + Math.cos(fireAngle) * 2,
+      handY + Math.sin(fireAngle) * 2,
+    );
     graphics.fillStyle(0x3a3a42, 1);
-    graphics.fillCircle(endX, endY, 4.5);
+    graphics.fillCircle(endX, endY, 5.5);
+    graphics.fillStyle(0xd6452f, 1);
+    graphics.fillCircle(endX - Math.cos(fireAngle) * 6, endY - Math.sin(fireAngle) * 6, 3.2);
   } else if (weaponKey === 'shotgun') {
     // Short, fat, and light gunmetal gray - deliberately unlike the
     // bazooka's long dark tube, so the two read as different guns even at
@@ -286,14 +639,20 @@ function drawHeldWeapon(
     graphics.translateCanvas(handX, handY);
     graphics.rotateCanvas(fireAngle);
     graphics.fillStyle(0x8a5a2e, 1);
-    graphics.fillRoundedRect(-11, -3.5, 7, 7, 2);
-    graphics.fillStyle(0xb7bcc4, 1);
-    graphics.fillRoundedRect(-2, -4.5, 17, 9, 2.5);
-    graphics.lineStyle(1.2, 0x8a8f98, 0.8);
-    graphics.lineBetween(-2, 0, 15, 0);
+    graphics.fillRoundedRect(-13, -4, 9, 8, 2);
+    graphics.fillStyle(0xc5ccd5, 1);
+    graphics.fillRoundedRect(-3, -5.5, 22, 5, 2.2);
+    graphics.fillRoundedRect(-3, 0.5, 22, 5, 2.2);
+    graphics.lineStyle(1.2, 0x6f747e, 0.85);
+    graphics.lineBetween(-3, 0, 20, 0);
+    graphics.fillStyle(0x353842, 1);
+    graphics.fillCircle(20, -3, 2.3);
+    graphics.fillCircle(20, 3, 2.3);
     graphics.restore();
   } else if (weaponKey === 'grenade') {
-    graphics.fillStyle(0x3f7a2e, 1);
+    graphics.fillStyle(0x203719, 0.22);
+    graphics.fillEllipse(handX + 1, handY + 3, 15, 9);
+    graphics.fillStyle(0x4f9a3a, 1);
     graphics.fillCircle(handX, handY, 6.5);
     // Pineapple-style cross-hatch texture
     graphics.lineStyle(1, 0x2e4a1c, 0.6);
@@ -306,7 +665,11 @@ function drawHeldWeapon(
     graphics.lineStyle(1.6, 0x4a4a3a, 1);
     graphics.lineBetween(handX, handY - 6.5, handX, handY - 9.5);
     graphics.fillStyle(0xc9c9c9, 1);
-    graphics.fillCircle(handX, handY - 9.5, 1.9);
+    graphics.fillCircle(handX, handY - 9.5, 2.2);
+    graphics.lineStyle(1.2, 0xe9edf2, 0.9);
+    graphics.beginPath();
+    graphics.arc(handX + 3.2, handY - 8.8, 3, -Math.PI * 0.2, Math.PI * 1.1);
+    graphics.strokePath();
   } else if (weaponKey === 'dynamite') {
     // A bundle of three sticks reads more like cartoon TNT than one stick -
     // a thin darker groove between each keeps them legible without a full
@@ -322,8 +685,12 @@ function drawHeldWeapon(
     graphics.lineBetween(handX, handY - 7, handX + 3, handY - 11);
     graphics.fillStyle(0xffe58a, 1);
     graphics.fillCircle(handX + 3, handY - 11, 1.8);
+    graphics.fillStyle(0xff7a1a, 0.8);
+    graphics.fillCircle(handX + 4.4, handY - 12.3, 1.3);
   } else if (weaponKey === 'ninjaRope') {
-    graphics.lineStyle(2.2, 0x8a6a3a, 1);
+    graphics.fillStyle(0x30323a, 1);
+    graphics.fillCircle(handX - worm.facing * 3, handY + 1, 4.5);
+    graphics.lineStyle(2.2, 0xc49a55, 1);
     graphics.beginPath();
     graphics.arc(handX, handY, 6, 0, Math.PI * 1.3);
     graphics.strokePath();
@@ -347,8 +714,10 @@ function drawWorm(
   const hand = handPosition(worm, timeMs);
 
   // Soft ground shadow spanning the whole crawling body
-  graphics.fillStyle(0x000000, 0.2);
-  graphics.fillEllipse(worm.x - facing * 6, worm.y + 13, 38, 7);
+  graphics.fillStyle(0x000000, 0.24);
+  graphics.fillEllipse(worm.x - facing * 6, worm.y + 14, 42, 8);
+  graphics.fillStyle(0x4c2e22, 0.08);
+  graphics.fillEllipse(worm.x - facing * 7, worm.y + 11, 34, 4);
 
   // The active worm's "it's your turn" marker is the pulsing gold glow
   // halo (GameScene's activeWormGlow, a separate GameObject) - a flat
@@ -360,10 +729,14 @@ function drawWorm(
     const segX = worm.x - facing * SEGMENT_OFFSETS[i];
     const segY = worm.y + 2 + crawlOffsetY(worm, timeMs, i + 1);
     const r = SEGMENT_RADII[i];
+    graphics.fillStyle(0x5b2f28, 0.18);
+    graphics.fillCircle(segX + 1.4, segY + 1.8, r * 1.02);
     graphics.fillStyle(BODY_COLOR, 1);
     graphics.fillCircle(segX, segY, r);
-    graphics.fillStyle(BODY_SHADE_COLOR, 0.55);
+    graphics.fillStyle(BODY_SHADE_COLOR, 0.62);
     graphics.fillEllipse(segX, segY + r * 0.4, r * 1.5, r * 0.7);
+    graphics.fillStyle(BODY_HIGHLIGHT_COLOR, 0.32);
+    graphics.fillEllipse(segX - facing * 2, segY - r * 0.36, r * 0.82, r * 0.32);
   }
 
   // Small resting arm nub on the foremost tail segment, opposite the arm
@@ -375,16 +748,22 @@ function drawWorm(
 
   // Head, with a subtle underside shade and a glossy highlight for a
   // rounded, toy-like cartoon feel.
+  graphics.fillStyle(0x5b2f28, 0.18);
+  graphics.fillCircle(head.x + 1.6, head.y + 1.8, HEAD_RADIUS * 1.03);
   graphics.fillStyle(BODY_COLOR, 1);
   graphics.fillCircle(head.x, head.y, HEAD_RADIUS);
   graphics.fillStyle(BODY_SHADE_COLOR, 0.6);
   graphics.fillEllipse(head.x, head.y + 5, 15, 7);
-  graphics.fillStyle(0xffffff, 0.35);
-  graphics.fillEllipse(head.x - facing * 3, head.y - 5, 7, 4.5);
+  graphics.fillStyle(BODY_HIGHLIGHT_COLOR, 0.48);
+  graphics.fillEllipse(head.x - facing * 3, head.y - 5, 8, 4.8);
+  graphics.fillStyle(0x6e4037, 0.18);
+  graphics.fillEllipse(head.x + facing * 4, head.y + 1, 3, 6);
 
   // Front arm, reaching from the head to the fist/weapon-grip point.
   graphics.lineStyle(6, BODY_COLOR, 1);
   graphics.lineBetween(head.x + facing * 3, head.y + 4, hand.x, hand.y);
+  graphics.lineStyle(2, BODY_HIGHLIGHT_COLOR, 0.35);
+  graphics.lineBetween(head.x + facing * 2, head.y + 2, hand.x - facing * 1.2, hand.y - 1.2);
   graphics.fillStyle(BODY_COLOR, 1);
   graphics.fillCircle(hand.x, hand.y, 4);
 
@@ -394,6 +773,8 @@ function drawWorm(
   graphics.fillStyle(teamColor, 1);
   graphics.fillTriangle(tailBaseX, head.y - 8, tailTipX, head.y - 11, tailTipX + facing * 3, head.y - 3);
   graphics.fillEllipse(head.x, head.y - 6, 20, 7);
+  graphics.fillStyle(0xffffff, 0.18);
+  graphics.fillEllipse(head.x - facing * 3, head.y - 8, 14, 2.4);
 
   // Eyes, offset toward the direction the worm is facing
   const eyeOffsetX = facing * 4;
@@ -469,22 +850,41 @@ export function drawExplosions(graphics: Phaser.GameObjects.Graphics, explosions
     const shockRadius = ex.radius * (0.7 + fraction * 2);
     const coreRadius = ex.radius * (0.35 + fraction * 0.5);
 
-    graphics.lineStyle(3, 0xfff2b0, fadeAlpha * 0.8);
-    graphics.strokeCircle(ex.x, ex.y, shockRadius);
+    graphics.fillStyle(0x18120d, 0.18 * fadeAlpha);
+    graphics.fillEllipse(ex.x + ex.radius * 0.08, ex.y + ex.radius * 0.36, shockRadius * 1.12, shockRadius * 0.24);
 
-    const sparkCount = 7;
+    graphics.lineStyle(4, 0xfff2b0, fadeAlpha * 0.74);
+    graphics.strokeCircle(ex.x, ex.y, shockRadius);
+    graphics.lineStyle(1.5, 0xffffff, flashAlpha * 0.6);
+    graphics.strokeCircle(ex.x, ex.y, shockRadius * 0.56);
+
+    const smokeCount = 9;
+    for (let i = 0; i < smokeCount; i++) {
+      const angle = (i / smokeCount) * Math.PI * 2 + ex.radius * 0.017;
+      const distance = coreRadius * (0.2 + fraction * (0.85 + (i % 3) * 0.12));
+      const smokeRadius = coreRadius * (0.28 + (i % 4) * 0.05) * (0.75 + fraction * 0.8);
+      const shade = i % 2 === 0 ? 0x473a31 : 0x2c2926;
+      graphics.fillStyle(shade, fadeAlpha * 0.3);
+      graphics.fillCircle(ex.x + Math.cos(angle) * distance, ex.y + Math.sin(angle) * distance, smokeRadius);
+    }
+
+    const sparkCount = 14;
     for (let i = 0; i < sparkCount; i++) {
       const angle = (i / sparkCount) * Math.PI * 2 + (ex.x % 7) * 0.3;
       const innerR = coreRadius * 0.5;
-      const outerR = coreRadius * (1.1 + 0.5 * ((i % 3) / 2));
-      graphics.lineStyle(2.5, 0xffb347, fadeAlpha * 0.7);
+      const outerR = coreRadius * (1.05 + 0.9 * ((i % 4) / 3));
+      graphics.lineStyle(i % 3 === 0 ? 3.2 : 2, i % 2 === 0 ? 0xfff2b0 : 0xff8a2a, fadeAlpha * 0.78);
       graphics.lineBetween(
-        ex.x + Math.cos(angle) * innerR, ex.y + Math.sin(angle) * innerR,
-        ex.x + Math.cos(angle) * outerR, ex.y + Math.sin(angle) * outerR,
+        ex.x + Math.cos(angle) * innerR,
+        ex.y + Math.sin(angle) * innerR,
+        ex.x + Math.cos(angle) * outerR,
+        ex.y + Math.sin(angle) * outerR,
       );
     }
 
-    graphics.fillStyle(0xff5a1a, fadeAlpha * 0.9);
+    graphics.fillStyle(0x6b2d19, fadeAlpha * 0.45);
+    graphics.fillCircle(ex.x + coreRadius * 0.1, ex.y + coreRadius * 0.13, coreRadius * 1.1);
+    graphics.fillStyle(0xff4f1a, fadeAlpha * 0.92);
     graphics.fillCircle(ex.x, ex.y, coreRadius);
     graphics.fillStyle(0xffb347, fadeAlpha);
     graphics.fillCircle(ex.x, ex.y, coreRadius * 0.6);
@@ -518,12 +918,14 @@ export function drawSplashes(graphics: Phaser.GameObjects.Graphics, splashes: Sp
 
 export function drawGravestones(graphics: Phaser.GameObjects.Graphics, gravestones: Gravestone[]): void {
   for (const stone of gravestones) {
-    graphics.fillStyle(0x000000, 0.18);
-    graphics.fillEllipse(stone.x, stone.y + 9, 16, 5);
-    graphics.fillStyle(0x9aa0a6, 1);
+    graphics.fillStyle(0x000000, 0.24);
+    graphics.fillEllipse(stone.x + 1, stone.y + 10, 20, 6);
+    graphics.fillGradientStyle(0xb9bec2, 0x9ca2a8, 0x6c7379, 0x555d63, 1);
     graphics.fillRoundedRect(stone.x - 7, stone.y - 9, 14, 16, { tl: 7, tr: 7, bl: 2, br: 2 });
     graphics.lineStyle(1.5, 0x6b7076, 1);
     graphics.strokeRoundedRect(stone.x - 7, stone.y - 9, 14, 16, { tl: 7, tr: 7, bl: 2, br: 2 });
+    graphics.lineStyle(1, 0xe3e6e8, 0.45);
+    graphics.lineBetween(stone.x - 4, stone.y - 5, stone.x - 4, stone.y + 5);
     graphics.lineStyle(1.5, 0x6b7076, 0.9);
     graphics.lineBetween(stone.x - 3, stone.y - 3, stone.x + 3, stone.y - 3);
     graphics.lineBetween(stone.x, stone.y - 6, stone.x, stone.y - 0.5);
@@ -585,12 +987,16 @@ export function drawScene(
 
   if (shotgunTracer) {
     const alpha = tracerAlpha(shotgunTracer.timer, SHOTGUN_TRACER_DURATION);
-    graphics.lineStyle(2, 0xfff2b0, alpha);
     for (const hit of shotgunTracer.hits) {
+      graphics.lineStyle(5, 0xff9d42, alpha * 0.18);
       graphics.lineBetween(shotgunTracer.originX, shotgunTracer.originY, hit.x, hit.y);
+      graphics.lineStyle(2, 0xfff2b0, alpha);
+      graphics.lineBetween(shotgunTracer.originX, shotgunTracer.originY, hit.x, hit.y);
+      graphics.fillStyle(0xffffff, alpha * 0.9);
+      graphics.fillCircle(hit.x, hit.y, 2.5);
     }
     graphics.fillStyle(0xffe58a, alpha);
-    graphics.fillCircle(shotgunTracer.originX, shotgunTracer.originY, 5);
+    graphics.fillCircle(shotgunTracer.originX, shotgunTracer.originY, 6);
   }
 
   const active = matchState.turnOrder[matchState.currentIndex];
@@ -598,10 +1004,14 @@ export function drawScene(
   // Draw rope visualization if attached
   if (rope && rope.anchorX != null && rope.anchorY != null && active.worm.alive) {
     const worm = active.worm;
-    graphics.lineStyle(2.5, 0x8d6e63, 1);
+    graphics.lineStyle(5, 0x2f2514, 0.22);
+    graphics.lineBetween(worm.x + 1, worm.y + 1, rope.anchorX + 1, rope.anchorY + 1);
+    graphics.lineStyle(2.5, 0xc49a55, 1);
     graphics.lineBetween(worm.x, worm.y, rope.anchorX, rope.anchorY);
-    graphics.fillStyle(0x8d6e63, 1);
-    graphics.fillCircle(rope.anchorX, rope.anchorY, 4);
+    graphics.fillStyle(0xdee2e6, 1);
+    graphics.fillCircle(rope.anchorX, rope.anchorY, 4.8);
+    graphics.lineStyle(1.4, 0x70757f, 1);
+    graphics.strokeCircle(rope.anchorX, rope.anchorY, 4.8);
   }
 
   // Draw a crosshair showing the active worm's current aim direction, or a
@@ -664,16 +1074,57 @@ export function drawScene(
       graphics.save();
       graphics.translateCanvas(projectile.x, projectile.y);
       graphics.rotateCanvas(angle);
+      graphics.fillStyle(0x15171a, 0.2);
+      graphics.fillEllipse(-19, 0, 34, 11);
+      graphics.fillStyle(0x6c747d, 0.22);
+      graphics.fillCircle(-25, 0, 9);
+      graphics.fillStyle(0xd9dde2, 0.18);
+      graphics.fillCircle(-29, -1.5, 6);
+      graphics.fillStyle(0xff8a2a, 0.62);
+      graphics.fillTriangle(-23, -5, -7, 0, -23, 5);
+      graphics.fillStyle(0xffe58a, 0.88);
+      graphics.fillTriangle(-16, -2.6, -4, 0, -16, 2.6);
+      graphics.fillStyle(0x8a2f20, 1);
+      graphics.fillRoundedRect(-8, -4.2, 14, 8.4, 2);
       graphics.fillStyle(fillColor, 1);
-      graphics.fillRoundedRect(-6, -3, 10, 6, 2);
-      graphics.fillTriangle(4, -3, 4, 3, 9, 0);
-      graphics.fillStyle(0xffe58a, 0.9);
-      graphics.fillTriangle(-9, -1.6, -6, 0, -9, 1.6);
+      graphics.fillRoundedRect(-5, -3.1, 11, 6.2, 2);
+      graphics.fillStyle(0xf2f5f7, 1);
+      graphics.fillTriangle(6, -3.5, 6, 3.5, 12, 0);
+      graphics.fillStyle(0xffffff, 0.52);
+      graphics.fillRoundedRect(-2, -2.5, 7, 1.5, 1);
+      graphics.fillStyle(0x45505a, 1);
+      graphics.fillTriangle(-4, -3.5, -9, -7, -3, -2.5);
+      graphics.fillTriangle(-4, 3.5, -9, 7, -3, 2.5);
       graphics.restore();
     } else if (projectile.weaponKey === 'dynamite') {
+      graphics.fillStyle(0x161010, 0.2);
+      graphics.fillEllipse(projectile.x + 1, projectile.y + 5, 17, 6);
       graphics.fillStyle(fillColor, 1);
-      graphics.fillRoundedRect(projectile.x - 3, projectile.y - 5, 6, 10, 2);
+      graphics.fillRoundedRect(projectile.x - 5, projectile.y - 5, 4, 11, 1.5);
+      graphics.fillRoundedRect(projectile.x - 1, projectile.y - 6, 4, 12, 1.5);
+      graphics.fillRoundedRect(projectile.x + 3, projectile.y - 5, 4, 11, 1.5);
+      graphics.fillStyle(0xff8a8a, 0.28);
+      graphics.fillRoundedRect(projectile.x - 4.4, projectile.y - 4.2, 2, 8, 1);
+      graphics.fillRoundedRect(projectile.x - 0.4, projectile.y - 5.2, 2, 9, 1);
+      graphics.lineStyle(1.4, 0x8a1220, 0.8);
+      graphics.lineBetween(projectile.x - 5, projectile.y - 1, projectile.x + 7, projectile.y - 1);
+      graphics.fillStyle(0xffe58a, isBlinkingRed ? 1 : 0.65);
+      graphics.fillCircle(projectile.x + 6, projectile.y - 8, isBlinkingRed ? 3 : 2);
+    } else if (projectile.weaponKey === 'grenade') {
+      graphics.fillStyle(0x203719, 0.25);
+      graphics.fillEllipse(projectile.x + 1.5, projectile.y + 2.5, 11, 7);
+      graphics.fillStyle(0x2c5d25, 1);
+      graphics.fillCircle(projectile.x + 1, projectile.y + 1, 5.5);
+      graphics.fillStyle(fillColor, 1);
+      graphics.fillCircle(projectile.x, projectile.y, 5.2);
+      graphics.lineStyle(1, 0x2e4a1c, 0.65);
+      graphics.lineBetween(projectile.x - 4, projectile.y, projectile.x + 4, projectile.y);
+      graphics.lineBetween(projectile.x, projectile.y - 4, projectile.x, projectile.y + 4);
+      graphics.fillStyle(0xffffff, 0.5);
+      graphics.fillCircle(projectile.x - 1.8, projectile.y - 1.8, 1.3);
     } else {
+      graphics.fillStyle(0x141414, 0.18);
+      graphics.fillEllipse(projectile.x + 1, projectile.y + 3, 10, 5);
       graphics.fillStyle(fillColor, 1);
       graphics.fillCircle(projectile.x, projectile.y, 4.5);
       graphics.fillStyle(0xffffff, 0.55);
@@ -699,11 +1150,7 @@ export function weaponLabel(selectedWeapon: number): string {
   return WEAPON_LABELS[key];
 }
 
-export function updateHud(
-  hudText: Phaser.GameObjects.Text,
-  matchState: MatchState,
-  selectedWeapon: number,
-): void {
+export function updateHud(hudText: Phaser.GameObjects.Text, matchState: MatchState, selectedWeapon: number): void {
   hudText.setText(
     `Wind: ${matchState.wind.toFixed(1)}\n` +
       `Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s\n` +
@@ -773,7 +1220,11 @@ export function drawTeamHealthBars(graphics: Phaser.GameObjects.Graphics, teams:
     graphics.fillRoundedRect(x - 2, y - 2, TEAM_BAR_WIDTH + 4, TEAM_BAR_HEIGHT + 4, 6);
     graphics.fillStyle(0x0f172e, 1);
     graphics.fillRoundedRect(x, y, TEAM_BAR_WIDTH, TEAM_BAR_HEIGHT, 4);
+    graphics.fillStyle(0xffffff, 0.08);
+    graphics.fillRoundedRect(x + 1, y + 1, TEAM_BAR_WIDTH - 2, 5, 3);
     graphics.fillStyle(color, 1);
     graphics.fillRoundedRect(x, y, Math.max(0, TEAM_BAR_WIDTH * fraction), TEAM_BAR_HEIGHT, 4);
+    graphics.fillStyle(0xffffff, 0.2);
+    graphics.fillRoundedRect(x + 2, y + 2, Math.max(0, TEAM_BAR_WIDTH * fraction - 4), 4, 2);
   });
 }

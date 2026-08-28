@@ -9,8 +9,14 @@ import { WEAPONS } from '../src/weapons.js';
 
 function makeInput(overrides: Partial<InputState> = {}): InputState {
   return {
-    left: false, right: false, aimUp: false, aimDown: false,
-    jump: false, firing: false, endTurnRequested: false, selectedWeapon: 1,
+    left: false,
+    right: false,
+    aimUp: false,
+    aimDown: false,
+    jump: false,
+    firing: false,
+    endTurnRequested: false,
+    selectedWeapon: 1,
     ...overrides,
   };
 }
@@ -106,6 +112,23 @@ describe('stepMatch charge/fire state machine', () => {
     expect(rt.projectiles).toHaveLength(1);
     expect(rt.projectiles[0].weaponKey).toBe('dynamite');
     expect(input.firing).toBe(false);
+  });
+
+  it('lets the active worm retreat after dropping a static fuse weapon without firing again', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const input = makeInput({ firing: true, selectedWeapon: 5 }); // dynamite, not chargeable
+
+    stepMatch(rt, input, 0.016);
+    const worm = rt.teams[0].worms[0];
+    const startX = worm.x;
+
+    input.right = true;
+    input.firing = true;
+    stepMatch(rt, input, 0.1);
+
+    expect(worm.x).toBeGreaterThan(startX);
+    expect(rt.projectiles).toHaveLength(1);
+    expect(rt.projectiles[0].weaponKey).toBe('dynamite');
   });
 
   it('does not let a second shot be fired while the first is still pending, so the turn reliably ends', () => {
@@ -222,7 +245,7 @@ describe('stepMatch retirement timer', () => {
     expect(rt.retirementTimer).not.toBeNull();
   });
 
-  it('freezes the active worm\'s own movement while its shot is retiring', () => {
+  it("freezes the active worm's own movement while its shot is retiring", () => {
     const rt = makeRuntime(twoWormTeams());
     rt.retirementTimer = 1;
     const worm = rt.teams[0].worms[0];

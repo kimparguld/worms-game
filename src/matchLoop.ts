@@ -5,8 +5,11 @@ import { createProjectile, updateProjectile } from './projectile.js';
 import { raycastHit, WEAPONS } from './weapons.js';
 import { fireRope, updateRopeSwing, adjustRopeLength } from './rope.js';
 import {
-  TURN_BANNER_DURATION_MS, ROPE_HOP_IMPULSE, SHOTGUN_TRACER_DURATION,
-  EXPLOSION_EFFECT_DURATION, SPLASH_EFFECT_DURATION,
+  TURN_BANNER_DURATION_MS,
+  ROPE_HOP_IMPULSE,
+  SHOTGUN_TRACER_DURATION,
+  EXPLOSION_EFFECT_DURATION,
+  SPLASH_EFFECT_DURATION,
 } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2 } from './types.js';
 
@@ -26,8 +29,16 @@ export function createMatchRuntime(
   // cliffs/buildings/lakes clear of - see SPAWN_EXCLUSION_FRACTIONS.
   const [p1aX, p1bX, p2aX, p2bX] = SPAWN_EXCLUSION_FRACTIONS.map((f) => Math.round(f * width));
   const teams: Team[] = [
-    { playerId: 'p1', name: team1Name, worms: [createWorm(p1aX, spawnY(p1aX), 'p1', 'W1'), createWorm(p1bX, spawnY(p1bX), 'p1', 'W2')] },
-    { playerId: 'p2', name: team2Name, worms: [createWorm(p2aX, spawnY(p2aX), 'p2', 'W3'), createWorm(p2bX, spawnY(p2bX), 'p2', 'W4')] },
+    {
+      playerId: 'p1',
+      name: team1Name,
+      worms: [createWorm(p1aX, spawnY(p1aX), 'p1', 'W1'), createWorm(p1bX, spawnY(p1bX), 'p1', 'W2')],
+    },
+    {
+      playerId: 'p2',
+      name: team2Name,
+      worms: [createWorm(p2aX, spawnY(p2aX), 'p2', 'W3'), createWorm(p2bX, spawnY(p2bX), 'p2', 'W4')],
+    },
   ];
   return {
     terrain,
@@ -81,6 +92,19 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
   }
 }
 
+function hasActiveStaticFuseProjectile(rt: MatchRuntime, worm: Worm): boolean {
+  return rt.projectiles.some((projectile) => {
+    const weapon = WEAPONS[projectile.weaponKey];
+    return (
+      projectile.alive &&
+      projectile.owner === worm &&
+      weapon.fuseTime !== null &&
+      weapon.minSpeed === 0 &&
+      weapon.maxSpeed === 0
+    );
+  });
+}
+
 export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void {
   // While the turn banner is showing, freeze everything else - the new
   // player shouldn't be able to act until it's gone.
@@ -108,13 +132,15 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   }
 
   // Apply physics to all worms: real input for active worm, neutral input for others.
-  // The active worm also gets neutral input while its shot is retiring
-  // (rt.retirementTimer set) - it fired, so it shouldn't be able to walk
-  // away before its own turn actually ends.
+  // Most committed shots lock movement while they resolve. Static fuse
+  // weapons are the exception: once dropped, the shooter gets a short retreat
+  // window while the fuse burns, but retirementTimer still prevents firing
+  // a second weapon in the same turn.
   const neutralInput: WormInput = { left: false, right: false, jump: false };
   const isRetiring = rt.retirementTimer !== null;
+  const canRetreatFromStaticFuse = isRetiring && hasActiveStaticFuseProjectile(rt, worm);
   for (const w of allWorms(rt)) {
-    const wormInput = w === worm && !isRetiring ? input : neutralInput;
+    const wormInput = w === worm && (!isRetiring || canRetreatFromStaticFuse) ? input : neutralInput;
     const wasAlive = w.alive;
     updateWormPhysics(w, rt.terrain, wormInput, dt);
     // alive flipping straight to false (skipping the dying/wiggle state) only
@@ -165,7 +191,12 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   for (const p of rt.projectiles) {
     const result = updateProjectile(p, rt.terrain, allWorms(rt), rt.match.wind, dt);
     if (result.exploded) {
-      rt.explosions.push({ x: p.x, y: p.y, radius: WEAPONS[p.weaponKey].craterRadius, timer: EXPLOSION_EFFECT_DURATION });
+      rt.explosions.push({
+        x: p.x,
+        y: p.y,
+        radius: WEAPONS[p.weaponKey].craterRadius,
+        timer: EXPLOSION_EFFECT_DURATION,
+      });
     }
   }
 

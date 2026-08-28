@@ -12,10 +12,8 @@ const EFFECT_SETTINGS: Record<SoundEffect, EffectSettings> = {
   charge: { startFrequency: 220, endFrequency: 440, duration: 0.28, volume: 0.07 },
 };
 
-const THEME_NOTES = [261.63, 329.63, 392, 523.25, 392, 329.63, 293.66, 349.23];
-const THEME_NOTE_DURATION = 0.42;
-const THEME_VOLUME = 0.035;
-const THEME_BASS_VOLUME = 0.022;
+const BACKGROUND_VIDEO_ID = 'ruuMCgS6VLk';
+const BACKGROUND_VOLUME = 18;
 
 function randomBetween(minimum: number, maximum: number): number {
   return minimum + Math.random() * (maximum - minimum);
@@ -32,8 +30,7 @@ export class SoundSystem {
   private context: AudioContext | null = null;
   private unlocked = false;
   private readonly createContext: AudioContextFactory;
-  private themeTimer: ReturnType<typeof setTimeout> | null = null;
-  private themeNoteIndex = 0;
+  private backgroundFrame: HTMLIFrameElement | null = null;
 
   constructor(createContext: AudioContextFactory = createAudioContext) {
     this.createContext = createContext;
@@ -79,27 +76,47 @@ export class SoundSystem {
     }
   }
 
-  startTheme(): void {
-    if (!this.unlocked || !this.context || this.themeTimer !== null) return;
-    this.playThemeNote();
+  startBackgroundMusic(): void {
+    if (!this.unlocked || this.backgroundFrame) return;
+    const frame = document.createElement('iframe');
+    const parameters = new URLSearchParams({
+      autoplay: '1',
+      controls: '0',
+      enablejsapi: '1',
+      loop: '1',
+      modestbranding: '1',
+      mute: '1',
+      origin: window.location.origin,
+      playlist: BACKGROUND_VIDEO_ID,
+      playsinline: '1',
+      rel: '0',
+    });
+    frame.src = `https://www.youtube.com/embed/${BACKGROUND_VIDEO_ID}?${parameters}`;
+    frame.title = 'Background music';
+    frame.allow = 'autoplay';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.position = 'fixed';
+    frame.style.width = '1px';
+    frame.style.height = '1px';
+    frame.style.opacity = '0';
+    frame.style.pointerEvents = 'none';
+    frame.addEventListener('load', () => {
+      this.sendPlayerCommand('unMute');
+      this.sendPlayerCommand('setVolume', [BACKGROUND_VOLUME]);
+      this.sendPlayerCommand('playVideo');
+    });
+    document.body.appendChild(frame);
+    this.backgroundFrame = frame;
   }
 
-  private playThemeNote(): void {
-    if (!this.unlocked || !this.context) return;
-    const note = THEME_NOTES[this.themeNoteIndex];
-    this.playTone(
-      { startFrequency: note, endFrequency: note, duration: THEME_NOTE_DURATION, volume: THEME_VOLUME },
-      'square',
-    );
-    this.playTone(
-      { startFrequency: note / 2, endFrequency: note / 2, duration: THEME_NOTE_DURATION, volume: THEME_BASS_VOLUME },
-      'triangle',
-    );
-    this.themeNoteIndex = (this.themeNoteIndex + 1) % THEME_NOTES.length;
-    this.themeTimer = setTimeout(() => {
-      this.themeTimer = null;
-      this.playThemeNote();
-    }, THEME_NOTE_DURATION * 1000);
+  private sendPlayerCommand(functionName: string, args: unknown[] = []): void {
+    if (!this.backgroundFrame?.contentWindow) return;
+    this.backgroundFrame.contentWindow.postMessage(JSON.stringify({
+      event: 'command',
+      func: functionName,
+      args,
+      id: 'worms-background-player',
+    }), 'https://www.youtube.com');
   }
 
   private playTone(settings: EffectSettings, oscillatorType: OscillatorType): void {

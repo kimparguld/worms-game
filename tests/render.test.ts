@@ -1,7 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import {
-  turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel,
-  fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale, teamHealthBarX, tracerAlpha,
+  turnBannerLabel,
+  turnBannerAlpha,
+  chargeBarLength,
+  chargeBarColor,
+  teamHealthFraction,
+  weaponLabel,
+  fuseBlinkFrequency,
+  projectileBlinkOn,
+  deathWiggleRotation,
+  deathWiggleScale,
+  teamHealthBarX,
+  tracerAlpha,
+  terrainPixelHash,
+  terrainMaterialColor,
+  surfaceDecorationHeight,
+  isShorelinePixel,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
@@ -73,9 +87,7 @@ describe('chargeBarColor', () => {
 
 describe('weaponLabel', () => {
   it('names each of the five selectable weapons', () => {
-    expect([1, 2, 3, 4, 5].map(weaponLabel)).toEqual([
-      'Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite',
-    ]);
+    expect([1, 2, 3, 4, 5].map(weaponLabel)).toEqual(['Bazooka', 'Grenade', 'Shotgun', 'Ninja Rope', 'Dynamite']);
   });
 
   it('falls back to the default weapon for an out-of-range selection', () => {
@@ -175,5 +187,70 @@ describe('teamHealthBarX', () => {
 
   it('right-aligns the second team', () => {
     expect(teamHealthBarX(1, 960)).toBe(960 - 16 - 220);
+  });
+});
+
+describe('terrainPixelHash', () => {
+  it('is deterministic for the same pixel and seed', () => {
+    expect(terrainPixelHash(10, 20, 1)).toBe(terrainPixelHash(10, 20, 1));
+  });
+
+  it('varies across nearby pixels', () => {
+    expect(terrainPixelHash(10, 20, 1)).not.toBe(terrainPixelHash(11, 20, 1));
+  });
+});
+
+describe('terrainMaterialColor', () => {
+  it('uses distinct colors for grass, soil, clay, and rock depths', () => {
+    const grass = terrainMaterialColor({ material: 1, depth: 1, x: 10, y: 20 });
+    const soil = terrainMaterialColor({ material: 1, depth: 20, x: 10, y: 40 });
+    const clay = terrainMaterialColor({ material: 1, depth: 60, x: 10, y: 80 });
+    const rock = terrainMaterialColor({ material: 1, depth: 100, x: 10, y: 130 });
+
+    expect(new Set([grass, soil, clay, rock].map((c) => `${c.r},${c.g},${c.b}`)).size).toBe(4);
+  });
+
+  it('keeps material variation deterministic', () => {
+    const input = { material: 1 as const, depth: 60, x: 34, y: 91 };
+    expect(terrainMaterialColor(input)).toEqual(terrainMaterialColor(input));
+  });
+
+  it('renders building material differently from earth at the same depth', () => {
+    const earth = terrainMaterialColor({ material: 1, depth: 30, x: 42, y: 80 });
+    const building = terrainMaterialColor({ material: 2, depth: 30, x: 42, y: 80, rowRunStartX: 20 });
+    expect(building).not.toEqual(earth);
+  });
+});
+
+describe('surfaceDecorationHeight', () => {
+  it('is deterministic for a terrain surface column', () => {
+    expect(surfaceDecorationHeight(42, 80, 17)).toBe(surfaceDecorationHeight(42, 80, 17));
+  });
+
+  it('keeps grass details within the planned visual-only height range', () => {
+    for (let x = 0; x < 100; x++) {
+      const height = surfaceDecorationHeight(x, 80, 17);
+      expect(height).toBeGreaterThanOrEqual(0);
+      expect(height).toBeLessThanOrEqual(4);
+    }
+  });
+});
+
+describe('isShorelinePixel', () => {
+  it('detects empty waterline pixels adjacent to terrain', () => {
+    const width = 10,
+      height = 10;
+    const mask = new Uint8Array(width * height);
+    mask[8 * width + 5] = 1;
+    expect(isShorelinePixel(mask, width, height, 5, 7)).toBe(true);
+  });
+
+  it('ignores solid pixels and empty pixels far away from the waterline', () => {
+    const width = 10,
+      height = 10;
+    const mask = new Uint8Array(width * height);
+    mask[8 * width + 5] = 1;
+    expect(isShorelinePixel(mask, width, height, 5, 8)).toBe(false);
+    expect(isShorelinePixel(mask, width, height, 5, 1)).toBe(false);
   });
 });
