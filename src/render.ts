@@ -43,6 +43,17 @@ function windowIsLit(cellX: number, cellY: number, seed: number): boolean {
   return h % 3 !== 0;
 }
 
+// Deterministic per-pixel darken/lighten so grass/dirt/rock read as a
+// mottled texture instead of a flat color fill - same cheap position-hash
+// technique as windowIsLit, so a redraw (e.g. after an explosion) never
+// flickers.
+export function terrainSpeckle(x: number, y: number): number {
+  let h = (x * 374761393) ^ (y * 668265263);
+  h = (h ^ (h >>> 13)) * 1274126177;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h % 21) - 10; // -10..+10
+}
+
 export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Terrain): void {
   const { width, height } = terrain;
   if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
@@ -65,6 +76,7 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
 
   for (let i = 0; i < terrain.mask.length; i++) {
     const x = i % width;
+    const y = (i / width) | 0;
     const o = i * 4;
     const cell = terrain.mask[i];
     if (cell === 2) {
@@ -124,25 +136,25 @@ export function drawTerrain(texture: Phaser.Textures.CanvasTexture, terrain: Ter
       buildingRunLength[x] = 0;
       runLength[x]++;
       const depth = runLength[x];
+      let r: number;
+      let g: number;
+      let b: number;
       if (depth === 1) {
-        // A bright sunlit rim along the grass's top edge, instead of a dark
-        // outline - reads as light catching the grass tips.
-        imageData.data[o] = 168;
-        imageData.data[o + 1] = 235;
-        imageData.data[o + 2] = 110;
+        // A bright sunlit rim along the grass's top edge - alternated
+        // between two close shades per column (instead of one flat tone)
+        // so the rim reads as a ragged grass-tip line, not a uniform stripe.
+        if (x % 5 < 3) { r = 168; g = 235; b = 110; } else { r = 150; g = 225; b = 96; }
       } else if (depth <= GRASS_DEPTH) {
-        imageData.data[o] = 104;
-        imageData.data[o + 1] = 214;
-        imageData.data[o + 2] = 64;
+        r = 104; g = 214; b = 64;
       } else if (depth <= DIRT_TRANSITION_DEPTH) {
-        imageData.data[o] = 150;
-        imageData.data[o + 1] = 96;
-        imageData.data[o + 2] = 46;
+        r = 150; g = 96; b = 46;
       } else {
-        imageData.data[o] = 96;
-        imageData.data[o + 1] = 60;
-        imageData.data[o + 2] = 30;
+        r = 96; g = 60; b = 30;
       }
+      const speckle = terrainSpeckle(x, y);
+      imageData.data[o] = Math.max(0, Math.min(255, r + speckle));
+      imageData.data[o + 1] = Math.max(0, Math.min(255, g + speckle));
+      imageData.data[o + 2] = Math.max(0, Math.min(255, b + speckle));
       imageData.data[o + 3] = 255;
     } else {
       runLength[x] = 0;

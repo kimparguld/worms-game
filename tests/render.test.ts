@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   turnBannerLabel, turnBannerAlpha, chargeBarLength, chargeBarColor, teamHealthFraction, weaponLabel,
   fuseBlinkFrequency, projectileBlinkOn, deathWiggleRotation, deathWiggleScale, teamHealthBarX, tracerAlpha,
+  terrainSpeckle,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
 
@@ -176,5 +177,25 @@ describe('teamHealthBarX', () => {
 
   it('right-aligns the second team', () => {
     expect(teamHealthBarX(1, 960)).toBe(960 - 16 - 220);
+  });
+});
+
+describe('terrainSpeckle', () => {
+  it('is deterministic for the same coordinates', () => {
+    expect(terrainSpeckle(12, 34)).toBe(terrainSpeckle(12, 34));
+  });
+
+  it('varies across different coordinates, not a flat single offset', () => {
+    const values = new Set<number>();
+    for (let x = 0; x < 20; x++) values.add(terrainSpeckle(x, 0));
+    expect(values.size).toBeGreaterThan(1);
+  });
+
+  it('stays within a small, bounded offset range', () => {
+    for (let x = 0; x < 50; x++) {
+      const v = terrainSpeckle(x, x * 3);
+      expect(v).toBeGreaterThanOrEqual(-10);
+      expect(v).toBeLessThanOrEqual(10);
+    }
   });
 });
