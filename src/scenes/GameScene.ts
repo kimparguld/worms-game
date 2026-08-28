@@ -80,6 +80,15 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     resetInputState(sharedInput);
+    // Phaser reuses this Scene instance across restarts (StartScene ->
+    // GameScene -> EndScene -> StartScene -> GameScene...), so create() runs
+    // more than once over the scene's lifetime while these two arrays are
+    // plain class fields initialized only at construction. Without clearing
+    // them here, each rematch would push another batch of objects onto
+    // arrays still holding references to the previous match's now-destroyed
+    // objects - an unbounded leak, and a growing list for every .ignore() call.
+    this.worldObjects = [];
+    this.uiObjects = [];
     this.input.once('pointerdown', () => this.unlockAudio());
     this.input.keyboard?.once('keydown', () => this.unlockAudio());
 
@@ -196,10 +205,21 @@ export class GameScene extends Phaser.Scene {
     this.uiCamera.ignore(this.worldObjects);
 
     // Zoom the main camera out just enough that the whole (larger) world
-    // fits the viewport with no scrolling - world and viewport share a
-    // 16:9 ratio, so one zoom factor covers both axes exactly.
+    // fits the viewport - world and viewport share a 16:9 ratio, so one
+    // zoom factor covers both axes exactly. That alone doesn't center the
+    // world, though: Phaser zooms a camera about its own midpoint, not the
+    // world origin, so with scroll left at (0, 0) the extra world revealed
+    // by zooming out past 1 would land off both the right and bottom edges
+    // of the viewport instead of being split evenly around it.
     this.cameras.main.setZoom(width / WORLD_WIDTH);
-    this.cameras.main.setScroll(0, 0);
+    // Phaser zooms a camera about its own midpoint, not the world origin, so
+    // scroll must be offset by half the extra world size on each axis to
+    // center the (larger) world in the viewport - not (0,0), which would
+    // leave the world's right/bottom edges (and the whole water band) off
+    // screen. This scroll is set once here and never touched again, so the
+    // "no scrolling/follow" constraint still holds - only the fixed offset
+    // changes from the original (0,0).
+    this.cameras.main.setScroll((WORLD_WIDTH - width) / 2, (WORLD_HEIGHT - height) / 2);
 
     // Release the terrain texture's GPU memory when this scene shuts down
     // (on restart, or when EndScene takes over) instead of leaking it.
