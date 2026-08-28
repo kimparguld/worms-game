@@ -242,6 +242,32 @@ describe('stepMatch rope handling', () => {
   });
 });
 
+describe('stepMatch ninja rope hop', () => {
+  it('gives the firing worm a small upward velocity nudge when the rope attaches', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.aimAngle = Math.PI / 2; // straight down, into the flat ground just below
+    const input = makeInput({ firing: true, selectedWeapon: 4 }); // ninja rope
+
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.rope).not.toBeNull();
+    expect(worm.vy).toBeLessThan(0);
+  });
+
+  it('does not nudge the worm when the rope fails to attach', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.aimAngle = -Math.PI / 2; // straight up, into open sky - nothing to grapple
+    const input = makeInput({ firing: true, selectedWeapon: 4 });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.rope).toBeNull();
+    expect(worm.vy).toBeGreaterThanOrEqual(0); // no upward hop - just this frame's normal gravity
+  });
+});
+
 describe('stepMatch weapon-index guard', () => {
   it('falls back to bazooka instead of throwing when selectedWeapon is out of range', () => {
     const rt = makeRuntime(twoWormTeams());

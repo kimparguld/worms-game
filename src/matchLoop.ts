@@ -4,7 +4,7 @@ import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js'
 import { createProjectile, updateProjectile } from './projectile.js';
 import { raycastHit, WEAPONS } from './weapons.js';
 import { fireRope, updateRopeSwing } from './rope.js';
-import { TURN_BANNER_DURATION_MS } from './constants.js';
+import { TURN_BANNER_DURATION_MS, ROPE_HOP_IMPULSE } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime } from './types.js';
 
 export const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
@@ -50,6 +50,10 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
   } else if (weaponKey === 'ninjaRope') {
     const result = fireRope(worm.x, worm.y, fireAngle, rt.terrain, 300);
     rt.rope = result.attached ? result : null;
+    // A grounded worm's very next physics tick would otherwise re-plant it
+    // on the ground before the swing can take over - a small upward nudge
+    // lifts it clear so updateRopeSwing actually gets to run the swing.
+    if (result.attached) worm.vy -= ROPE_HOP_IMPULSE;
   } else {
     rt.projectiles.push(createProjectile(weaponKey, worm.x, worm.y, fireAngle, power));
     rt.retirementTimer = 2;
