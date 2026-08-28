@@ -120,4 +120,5 @@ export interface MatchRuntime {
   charging: boolean;
   chargePower: number;
   retirementTimer: number | null;
+  turnBannerTimer: number | null;
 }

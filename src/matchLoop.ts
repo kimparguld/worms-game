@@ -4,6 +4,7 @@ import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js'
 import { createProjectile, updateProjectile } from './projectile.js';
 import { raycastHit, WEAPONS } from './weapons.js';
 import { fireRope, updateRopeSwing } from './rope.js';
+import { TURN_BANNER_DURATION_MS } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime } from './types.js';
 
 const WEAPON_KEYS: WeaponKey[] = ['bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite'];
@@ -26,6 +27,7 @@ export function createMatchRuntime(width: number, height: number): MatchRuntime 
     charging: false,
     chargePower: 0,
     retirementTimer: null,
+    turnBannerTimer: null,
   };
 }
 
@@ -55,6 +57,14 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
 }
 
 export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void {
+  // While the turn banner is showing, freeze everything else - the new
+  // player shouldn't be able to act until it's gone.
+  if (rt.turnBannerTimer !== null) {
+    rt.turnBannerTimer -= dt * 1000;
+    if (rt.turnBannerTimer <= 0) rt.turnBannerTimer = null;
+    return;
+  }
+
   const active = currentWorm(rt.match);
   const worm = active.worm;
   const weaponKey = WEAPON_KEYS[input.selectedWeapon - 1] ?? 'bazooka';
@@ -132,5 +142,6 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     rt.charging = false;
     rt.chargePower = 0;
     rt.rope = null;
+    rt.turnBannerTimer = TURN_BANNER_DURATION_MS;
   }
 }

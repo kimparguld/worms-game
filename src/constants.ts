@@ -8,3 +8,4 @@ export const TURN_DURATION_MS = 45000;
 export const STARTING_HP = 100;
 export const WIND_MAX = 50; // px/s^2, max magnitude of per-turn wind acceleration
 export const WORM_STEP_HEIGHT = 10; // px the worm can step up per frame when moving horizontally while grounded
+export const TURN_BANNER_DURATION_MS = 1500; // ms the "Player N turn" banner shows on a turn switch, during which stepMatch freezes all input/physics

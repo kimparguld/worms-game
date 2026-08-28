@@ -4,7 +4,7 @@ import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
 import type { InputState, Team, MatchRuntime } from '../src/types.js';
-import { STARTING_HP } from '../src/constants.js';
+import { STARTING_HP, TURN_BANNER_DURATION_MS } from '../src/constants.js';
 
 function makeInput(overrides: Partial<InputState> = {}): InputState {
   return {
@@ -29,6 +29,7 @@ function makeRuntime(teams: Team[]): MatchRuntime {
     charging: false,
     chargePower: 0,
     retirementTimer: null,
+    turnBannerTimer: null,
   };
 }
 
@@ -57,6 +58,7 @@ describe('createMatchRuntime', () => {
     expect(rt.charging).toBe(false);
     expect(rt.chargePower).toBe(0);
     expect(rt.retirementTimer).toBeNull();
+    expect(rt.turnBannerTimer).toBeNull();
   });
 });
 
@@ -253,5 +255,45 @@ describe('stepMatch weapon-index guard', () => {
 
     expect(rt.projectiles).toHaveLength(1);
     expect(rt.projectiles[0].weaponKey).toBe('bazooka');
+  });
+});
+
+describe('stepMatch turn banner', () => {
+  it('sets the turn banner timer when the turn advances', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.match.turnTimeRemaining = 5;
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.01); // 10ms tick expires the 5ms-remaining turn timer
+
+    expect(rt.turnBannerTimer).toBe(TURN_BANNER_DURATION_MS);
+  });
+
+  it('freezes input/physics processing while the turn banner is showing', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.turnBannerTimer = TURN_BANNER_DURATION_MS;
+    const worm = rt.match.turnOrder[rt.match.currentIndex].worm;
+    const originalX = worm.x;
+    const input = makeInput({ left: true });
+
+    stepMatch(rt, input, 0.5);
+
+    expect(worm.x).toBe(originalX);
+  });
+
+  it('counts down and clears once the banner duration elapses, then resumes normal processing', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.turnBannerTimer = 100; // 100ms left
+
+    stepMatch(rt, makeInput(), 0.05); // 50ms tick, banner still showing
+    expect(rt.turnBannerTimer).toBe(50);
+
+    stepMatch(rt, makeInput(), 0.05); // another 50ms tick, banner clears exactly at 0
+    expect(rt.turnBannerTimer).toBeNull();
+
+    const worm = rt.match.turnOrder[rt.match.currentIndex].worm;
+    const originalX = worm.x;
+    stepMatch(rt, makeInput({ left: true }), 0.5); // banner is gone - input processes normally again
+    expect(worm.x).not.toBe(originalX);
   });
 });
