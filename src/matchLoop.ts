@@ -1,5 +1,5 @@
 import { findSurfaceY, createTerrain } from './terrain.js';
-import { createWorm, updateWormPhysics, adjustAim, takeDamage } from './worm.js';
+import { createWorm, updateWormPhysics, adjustAim, takeDamage, tickDeathAnimation } from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js';
 import { createProjectile, updateProjectile } from './projectile.js';
 import { raycastHit, WEAPONS } from './weapons.js';
@@ -28,6 +28,7 @@ export function createMatchRuntime(width: number, height: number): MatchRuntime 
     chargePower: 0,
     retirementTimer: null,
     turnBannerTimer: TURN_BANNER_DURATION_MS,
+    gravestones: [],
   };
 }
 
@@ -90,6 +91,9 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   for (const w of allWorms(rt)) {
     const wormInput = w === worm ? input : neutralInput;
     updateWormPhysics(w, rt.terrain, wormInput, dt);
+    if (tickDeathAnimation(w, dt * 1000)) {
+      rt.gravestones.push({ x: w.x, y: w.y });
+    }
   }
 
   if (worm.alive) {

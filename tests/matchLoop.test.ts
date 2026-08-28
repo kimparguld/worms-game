@@ -30,6 +30,7 @@ function makeRuntime(teams: Team[]): MatchRuntime {
     chargePower: 0,
     retirementTimer: null,
     turnBannerTimer: null,
+    gravestones: [],
   };
 }
 
@@ -59,6 +60,7 @@ describe('createMatchRuntime', () => {
     expect(rt.chargePower).toBe(0);
     expect(rt.retirementTimer).toBeNull();
     expect(rt.turnBannerTimer).toBe(TURN_BANNER_DURATION_MS);
+    expect(rt.gravestones).toEqual([]);
   });
 });
 
@@ -348,5 +350,38 @@ describe('stepMatch turn banner', () => {
     stepMatch(rt, input, 0.016);
 
     expect(rt.match.currentIndex).toBe(indexAtBannerStart);
+  });
+});
+
+describe('stepMatch death animation', () => {
+  it('leaves a gravestone at the spot once a dying worm finishes its animation', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.hp = 0;
+    worm.dying = true;
+    worm.deathTimer = 10; // 10ms left
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.02); // 20ms tick expires the 10ms-remaining death timer
+
+    expect(worm.alive).toBe(false);
+    expect(worm.dying).toBe(false);
+    expect(rt.gravestones).toHaveLength(1);
+    expect(rt.gravestones[0].x).toBeCloseTo(worm.x, 5);
+    expect(rt.gravestones[0].y).toBeCloseTo(worm.y, 5);
+  });
+
+  it('does not leave a gravestone while the death animation is still playing', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.hp = 0;
+    worm.dying = true;
+    worm.deathTimer = 500;
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.02);
+
+    expect(worm.dying).toBe(true);
+    expect(rt.gravestones).toHaveLength(0);
   });
 });

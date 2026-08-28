@@ -103,6 +103,11 @@ export interface RaycastHit {
   distance: number;
 }
 
+export interface Gravestone {
+  x: number;
+  y: number;
+}
+
 export interface Vector2 {
   x: number;
   y: number;
@@ -123,4 +128,5 @@ export interface MatchRuntime {
   chargePower: number;
   retirementTimer: number | null;
   turnBannerTimer: number | null;
+  gravestones: Gravestone[];
 }
