@@ -343,6 +343,66 @@ function drawHeldWeapon(
     const hookY = handY + Math.sin(Math.PI * 1.3) * 6;
     graphics.fillStyle(0x9a9aa2, 1);
     graphics.fillCircle(hookX, hookY, 2.2);
+  } else if (weaponKey === 'sniperRifle') {
+    // A long, thin barrel - visually distinct from the bazooka's thicker
+    // tube at a glance.
+    const length = 26;
+    const endX = handX + Math.cos(fireAngle) * length;
+    const endY = handY + Math.sin(fireAngle) * length;
+    graphics.lineStyle(3.5, 0x2e2e38, 1);
+    graphics.lineBetween(handX, handY, endX, endY);
+    graphics.fillStyle(0x1c1c22, 1);
+    graphics.fillRect(handX + Math.cos(fireAngle) * 10 - 2, handY + Math.sin(fireAngle) * 10 - 5, 4, 4);
+  } else if (weaponKey === 'airstrikeRocket') {
+    // A sleeker, finned rocket in icy blue - reads as "air support" rather
+    // than the bazooka's infantry rocket.
+    const length = 22;
+    const endX = handX + Math.cos(fireAngle) * length;
+    const endY = handY + Math.sin(fireAngle) * length;
+    graphics.lineStyle(5, 0x4fc3f7, 1);
+    graphics.lineBetween(handX, handY, endX, endY);
+    graphics.fillStyle(0x1c8fc7, 1);
+    graphics.fillTriangle(
+      endX, endY,
+      endX - Math.cos(fireAngle) * 6 - 4, endY - Math.sin(fireAngle) * 6,
+      endX - Math.cos(fireAngle) * 6 + 4, endY - Math.sin(fireAngle) * 6,
+    );
+  } else if (weaponKey === 'holyHandGrenade') {
+    // A grenade with a gold cross instead of a pull-pin ring - reads as a
+    // "blessed" upgrade of the regular grenade at a glance.
+    graphics.fillStyle(0xffd700, 1);
+    graphics.fillCircle(handX, handY, 7);
+    graphics.lineStyle(1, 0xb8860b, 0.7);
+    graphics.strokeCircle(handX, handY, 7);
+    graphics.fillStyle(0xfff4c2, 0.4);
+    graphics.fillCircle(handX - 2, handY - 2, 2.2);
+    graphics.lineStyle(2, 0xfff4c2, 1);
+    graphics.lineBetween(handX, handY - 11, handX, handY - 3);
+    graphics.lineBetween(handX - 3, handY - 7, handX + 3, handY - 7);
+  } else if (weaponKey === 'mine') {
+    // A dark, spiked sphere - reads as a naval-style mine, not another
+    // grenade, even though both are round.
+    graphics.fillStyle(0x37474f, 1);
+    graphics.fillCircle(handX, handY, 6.5);
+    for (const angle of [0, 60, 120, 180, 240, 300]) {
+      const rad = (angle * Math.PI) / 180;
+      graphics.lineStyle(1.6, 0x1c262b, 1);
+      graphics.lineBetween(
+        handX + Math.cos(rad) * 6.5, handY + Math.sin(rad) * 6.5,
+        handX + Math.cos(rad) * 10, handY + Math.sin(rad) * 10,
+      );
+    }
+  } else if (weaponKey === 'grapplingHook') {
+    // Same coiled-rope silhouette as the ninja rope, but with a wider,
+    // three-pronged claw instead of a single hook point.
+    graphics.lineStyle(2.2, 0x8a6a3a, 1);
+    graphics.beginPath();
+    graphics.arc(handX, handY, 6, 0, Math.PI * 1.3);
+    graphics.strokePath();
+    const hookX = handX + Math.cos(Math.PI * 1.3) * 6;
+    const hookY = handY + Math.sin(Math.PI * 1.3) * 6;
+    graphics.fillStyle(0x9a9aa2, 1);
+    for (const dx of [-3, 0, 3]) graphics.fillCircle(hookX + dx, hookY, 1.8);
   }
 }
 
@@ -690,6 +750,26 @@ export function drawScene(
     } else if (projectile.weaponKey === 'dynamite') {
       graphics.fillStyle(fillColor, 1);
       graphics.fillRoundedRect(projectile.x - 3, projectile.y - 5, 6, 10, 2);
+    } else if (projectile.weaponKey === 'airstrikeRocket') {
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      graphics.save();
+      graphics.translateCanvas(projectile.x, projectile.y);
+      graphics.rotateCanvas(angle);
+      graphics.fillStyle(fillColor, 1);
+      graphics.fillRoundedRect(-7, -2.5, 12, 5, 2);
+      graphics.fillTriangle(5, -2.5, 5, 2.5, 10, 0);
+      graphics.restore();
+    } else if (projectile.weaponKey === 'mine') {
+      graphics.fillStyle(fillColor, 1);
+      graphics.fillCircle(projectile.x, projectile.y, 5);
+      graphics.lineStyle(1.4, 0x1c262b, 1);
+      for (const angle of [0, 90, 180, 270]) {
+        const rad = (angle * Math.PI) / 180;
+        graphics.lineBetween(
+          projectile.x + Math.cos(rad) * 5, projectile.y + Math.sin(rad) * 5,
+          projectile.x + Math.cos(rad) * 8, projectile.y + Math.sin(rad) * 8,
+        );
+      }
     } else {
       graphics.fillStyle(fillColor, 1);
       graphics.fillCircle(projectile.x, projectile.y, 4.5);
