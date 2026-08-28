@@ -16,7 +16,7 @@ function flatTerrain(width: number, height: number, groundY: number): Terrain {
 describe('createProjectile', () => {
   it('scales speed with charge power for a chargeable weapon', () => {
     const p = createProjectile('bazooka', 0, 0, 0, 0.5);
-    expect(p.vx).toBeCloseTo(200 + (600 - 200) * 0.5);
+    expect(p.vx).toBeCloseTo(200 + (850 - 200) * 0.5);
     expect(p.alive).toBe(true);
   });
 });

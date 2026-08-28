@@ -11,6 +11,16 @@ describe('WEAPONS', () => {
   });
 });
 
+describe('WEAPONS range', () => {
+  it('gives the bazooka enough max speed to cross most of the map at full charge', () => {
+    expect(WEAPONS.bazooka.maxSpeed).toBe(850);
+  });
+
+  it('gives the grenade enough max speed to reach well past a short lob', () => {
+    expect(WEAPONS.grenade.maxSpeed).toBe(600);
+  });
+});
+
 describe('integrateProjectile', () => {
   it('applies gravity to vertical velocity and moves position', () => {
     const { pos, vel } = integrateProjectile({ x: 0, y: 0 }, { x: 10, y: 0 }, 100, 0, 1);

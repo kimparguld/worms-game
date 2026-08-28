@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   GRAVITY, WORM_MOVE_ACCEL, WORM_MOVE_SPEED, JUMP_IMPULSE,
-  TURN_DURATION_MS, STARTING_HP,
+  TURN_DURATION_MS, STARTING_HP, WIND_MAX,
 } from '../src/constants.js';
 
 describe('constants', () => {
@@ -18,5 +18,9 @@ describe('constants', () => {
 
   it('starts worms at 100 HP', () => {
     expect(STARTING_HP).toBe(100);
+  });
+
+  it('sets a wind strength that meaningfully bends wind-affected projectiles', () => {
+    expect(WIND_MAX).toBe(140);
   });
 });
