@@ -131,6 +131,43 @@ describe('stepMatch dead-worm guard', () => {
   });
 });
 
+describe('stepMatch dying-worm guard', () => {
+  it('does not let a dying active worm aim, fire, or swing on the rope', () => {
+    const teams = twoWormTeams();
+    const worm = teams[0].worms[0];
+    worm.alive = true;
+    worm.dying = true;
+    worm.deathTimer = 500;
+    const originalAngle = worm.aimAngle;
+    const originalX = worm.x;
+    const originalY = worm.y;
+    const rt = makeRuntime(teams);
+    rt.rope = { attached: true, anchorX: 60, anchorY: 100, length: 50 };
+    // selectedWeapon 3 (shotgun) is NOT chargeable, so firing:true would
+    // fire immediately (setting rt.retirementTimer and dealing raycast
+    // damage) if the dying-worm guard were missing.
+    const input = makeInput({ firing: true, aimUp: true, selectedWeapon: 3 });
+
+    // A single small frame, not the 0.5s used by the dead-worm guard test
+    // above: unlike a dead worm (whose physics is a full no-op), a dying
+    // worm still falls under normal gravity by design (the death wiggle),
+    // so a large dt would move it for reasons unrelated to this guard.
+    stepMatch(rt, input, 0.016);
+
+    expect(worm.aimAngle).toBe(originalAngle);
+    // If the guard didn't also cover rope-swing, updateRopeSwing would have
+    // pulled this worm noticeably toward the (60, 100) anchor - far more
+    // than the sub-pixel drift a single frame of plain gravity produces.
+    expect(Math.hypot(worm.x - originalX, worm.y - originalY)).toBeLessThan(5);
+    // Shotgun deals damage via an instant raycast, not rt.projectiles, so the
+    // aim-independent tell that it fired is the retirement timer it sets.
+    expect(rt.retirementTimer).toBeNull();
+    expect(teams[1].worms[0].hp).toBe(STARTING_HP);
+    expect(rt.charging).toBe(false);
+    expect(rt.rope).not.toBeNull();
+  });
+});
+
 describe('stepMatch retirement timer', () => {
   it('waits for all projectiles to settle before advancing the turn', () => {
     const rt = makeRuntime(twoWormTeams());

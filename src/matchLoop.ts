@@ -79,11 +79,12 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   const active = currentWorm(rt.match);
   const worm = active.worm;
   const weaponKey = WEAPON_KEYS[input.selectedWeapon - 1] ?? 'bazooka';
+  const canAct = worm.alive && !worm.dying;
 
-  // A dead active worm can no longer swing on the rope, aim, or fire for
-  // the rest of its turn - only physics (already a no-op for dead worms)
-  // and turn timers keep running until the turn actually advances.
-  if (worm.alive) {
+  // A dead or dying active worm can no longer swing on the rope, aim, or
+  // fire for the rest of its turn - only physics (already a no-op for dead
+  // worms) and turn timers keep running until the turn actually advances.
+  if (canAct) {
     // Apply rope-swing logic only to the active worm when rope is attached
     if (rt.rope) {
       updateRopeSwing(worm, rt.rope, dt);
@@ -101,7 +102,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     }
   }
 
-  if (worm.alive) {
+  if (canAct) {
     if (input.aimUp) adjustAim(worm, -1, dt);
     if (input.aimDown) adjustAim(worm, 1, dt);
 
