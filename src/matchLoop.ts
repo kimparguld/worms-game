@@ -1,5 +1,12 @@
 import { findSurfaceY, createTerrain, waterLevelY, SPAWN_EXCLUSION_FRACTIONS, carveCircle } from './terrain.js';
-import { createWorm, updateWormPhysics, adjustAim, takeDamage, tickDeathAnimation } from './worm.js';
+import {
+  createWorm,
+  updateWormPhysics,
+  adjustAim,
+  takeDamage,
+  tickDeathAnimation,
+  applyExplosionKnockback,
+} from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js';
 import { createProjectile, updateProjectile } from './projectile.js';
 import { calcDamage, raycastHit, WEAPONS } from './weapons.js';
@@ -11,6 +18,8 @@ import {
   EXPLOSION_EFFECT_DURATION,
   SPLASH_EFFECT_DURATION,
   DEFAULT_WORM_NAMES,
+  DEATH_EXPLOSION_RADIUS,
+  DEATH_EXPLOSION_DAMAGE,
 } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2 } from './types.js';
 
@@ -82,10 +91,33 @@ function detonateAt(rt: MatchRuntime, weaponKey: WeaponKey, x: number, y: number
   for (const target of allWorms(rt)) {
     if (!target.alive || target.dying) continue;
     const damage = calcDamage(Math.hypot(target.x - x, target.y - y), def.blastRadius, def.maxDamage);
-    if (damage > 0) takeDamage(target, damage);
+    if (damage > 0) {
+      takeDamage(target, damage);
+      applyExplosionKnockback(target, damage);
+    }
   }
   rt.explosions.push({ x, y, radius: def.craterRadius, timer: EXPLOSION_EFFECT_DURATION });
   rt.retirementTimer = 1;
+}
+
+// A dying worm goes out with a blast of its own - worms crowded around a
+// kill are at risk, same as standing too close to any other explosive. No
+// crater (death isn't terrain-destroying), just damage, knockback, and the
+// same fireball visual every other blast uses.
+function detonateDeath(rt: MatchRuntime, deadWorm: Worm): void {
+  for (const target of allWorms(rt)) {
+    if (!target.alive || target.dying) continue;
+    const damage = calcDamage(
+      Math.hypot(target.x - deadWorm.x, target.y - deadWorm.y),
+      DEATH_EXPLOSION_RADIUS,
+      DEATH_EXPLOSION_DAMAGE,
+    );
+    if (damage > 0) {
+      takeDamage(target, damage);
+      applyExplosionKnockback(target, damage);
+    }
+  }
+  rt.explosions.push({ x: deadWorm.x, y: deadWorm.y, radius: DEATH_EXPLOSION_RADIUS, timer: EXPLOSION_EFFECT_DURATION });
 }
 
 function drillTerrain(rt: MatchRuntime, worm: Worm, angle: number, range: number, radius: number): void {
@@ -210,6 +242,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     }
     if (tickDeathAnimation(w, dt * 1000)) {
       rt.gravestones.push({ x: w.x, y: w.y });
+      detonateDeath(rt, w);
     }
   }
 

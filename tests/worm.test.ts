@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { createWorm, takeDamage, adjustAim, updateWormPhysics, tickDeathAnimation } from '../src/worm.js';
-import { DEATH_ANIM_DURATION_MS } from '../src/constants.js';
+import {
+  createWorm,
+  takeDamage,
+  adjustAim,
+  updateWormPhysics,
+  tickDeathAnimation,
+  applyExplosionKnockback,
+} from '../src/worm.js';
+import { DEATH_ANIM_DURATION_MS, EXPLOSION_KNOCKBACK_PER_DAMAGE } from '../src/constants.js';
 import { createTerrain } from '../src/terrain.js';
 import type { Terrain, WormInput } from '../src/types.js';
 
@@ -84,6 +91,36 @@ describe('tickDeathAnimation', () => {
     expect(worm.dying).toBe(false);
     expect(worm.alive).toBe(false);
     expect(worm.deathTimer).toBeNull();
+  });
+});
+
+describe('applyExplosionKnockback', () => {
+  it('launches the worm upward proportional to the damage dealt', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    worm.vy = 0;
+    applyExplosionKnockback(worm, 30);
+    expect(worm.vy).toBeCloseTo(-30 * EXPLOSION_KNOCKBACK_PER_DAMAGE);
+  });
+
+  it('adds to any existing vertical velocity rather than replacing it', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    worm.vy = 50; // already falling
+    applyExplosionKnockback(worm, 10);
+    expect(worm.vy).toBeCloseTo(50 - 10 * EXPLOSION_KNOCKBACK_PER_DAMAGE);
+  });
+
+  it('knocks the worm airborne even if it was standing on the ground', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    worm.onGround = true;
+    applyExplosionKnockback(worm, 20);
+    expect(worm.onGround).toBe(false);
+  });
+
+  it('leaves horizontal velocity untouched (vx re-clamps every tick regardless of source)', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    worm.vx = 3;
+    applyExplosionKnockback(worm, 40);
+    expect(worm.vx).toBe(3);
   });
 });
 

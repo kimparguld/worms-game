@@ -1,10 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../src/matchLoop.js';
 import { createTerrain } from '../src/terrain.js';
-import { createWorm } from '../src/worm.js';
+import { createWorm, takeDamage } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
 import type { InputState, Team, MatchRuntime } from '../src/types.js';
-import { STARTING_HP, TURN_BANNER_DURATION_MS, SHOTGUN_TRACER_DURATION } from '../src/constants.js';
+import {
+  STARTING_HP,
+  TURN_BANNER_DURATION_MS,
+  SHOTGUN_TRACER_DURATION,
+  DEATH_ANIM_DURATION_MS,
+} from '../src/constants.js';
 import { WEAPONS } from '../src/weapons.js';
 
 function makeInput(overrides: Partial<InputState> = {}): InputState {
@@ -710,5 +715,55 @@ describe('stepMatch drill', () => {
     expect(rt.terrain.mask[targetIndex]).toBe(0);
     expect(rt.rope).toBeNull();
     expect(rt.projectiles).toHaveLength(0);
+  });
+});
+
+describe('death explosion', () => {
+  it('damages and launches a worm standing near one that just died, the instant it finalizes', () => {
+    const victim = createWorm(50, 149, 'p1', 'A');
+    const bystander = createWorm(65, 149, 'p2', 'B'); // 15px away - well inside the death blast radius
+    const teams: Team[] = [
+      { playerId: 'p1', name: 'Team 1', worms: [victim] },
+      { playerId: 'p2', name: 'Team 2', worms: [bystander] },
+    ];
+    const rt = makeRuntime(teams);
+    takeDamage(victim, 100); // starts the death animation
+    const startHp = bystander.hp;
+    const input = makeInput();
+    const dt = 1 / 60;
+    const maxTicks = Math.ceil(DEATH_ANIM_DURATION_MS / (dt * 1000)) + 1;
+    for (let i = 0; i < maxTicks; i++) {
+      stepMatch(rt, input, dt);
+      if (rt.gravestones.length > 0) break; // stop the instant the death finalizes
+    }
+
+    expect(rt.gravestones).toHaveLength(1);
+    expect(bystander.hp).toBeLessThan(startHp);
+    expect(bystander.vy).toBeLessThan(0);
+    expect(rt.explosions).toHaveLength(1);
+    expect(rt.explosions[0].x).toBeCloseTo(50);
+    expect(rt.explosions[0].radius).toBe(35);
+  });
+
+  it('does not hurt a worm outside the death blast radius', () => {
+    const victim = createWorm(50, 149, 'p1', 'A');
+    const farAway = createWorm(150, 149, 'p2', 'B');
+    const teams: Team[] = [
+      { playerId: 'p1', name: 'Team 1', worms: [victim] },
+      { playerId: 'p2', name: 'Team 2', worms: [farAway] },
+    ];
+    const rt = makeRuntime(teams);
+    takeDamage(victim, 100);
+    const startHp = farAway.hp;
+    const input = makeInput();
+    const dt = 1 / 60;
+    const maxTicks = Math.ceil(DEATH_ANIM_DURATION_MS / (dt * 1000)) + 1;
+    for (let i = 0; i < maxTicks; i++) {
+      stepMatch(rt, input, dt);
+      if (rt.gravestones.length > 0) break;
+    }
+
+    expect(rt.gravestones).toHaveLength(1);
+    expect(farAway.hp).toBe(startHp);
   });
 });

@@ -2,7 +2,7 @@ import { isSolid, waterLevelY } from './terrain.js';
 import {
   GRAVITY, WORM_MOVE_ACCEL, WORM_MOVE_SPEED, JUMP_IMPULSE,
   FALL_DAMAGE_VELOCITY_THRESHOLD, FALL_DAMAGE_PER_VELOCITY, STARTING_HP,
-  WORM_STEP_HEIGHT, DEATH_ANIM_DURATION_MS,
+  WORM_STEP_HEIGHT, DEATH_ANIM_DURATION_MS, EXPLOSION_KNOCKBACK_PER_DAMAGE,
 } from './constants.js';
 import type { Terrain, Worm, WormInput } from './types.js';
 
@@ -39,6 +39,15 @@ export function tickDeathAnimation(worm: Worm, dtMs: number): boolean {
     return true;
   }
   return false;
+}
+
+// Launches a worm caught in a blast straight up, scaled by the damage it
+// actually took (so a graze barely lifts it while a point-blank hit sends
+// it flying) - see EXPLOSION_KNOCKBACK_PER_DAMAGE for why this is vertical
+// only, so it takes no explosion-origin/direction input.
+export function applyExplosionKnockback(worm: Worm, damage: number): void {
+  worm.vy -= damage * EXPLOSION_KNOCKBACK_PER_DAMAGE;
+  worm.onGround = false;
 }
 
 export function adjustAim(worm: Worm, direction: number, dt: number): void {

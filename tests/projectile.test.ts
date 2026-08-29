@@ -49,6 +49,19 @@ describe('updateProjectile', () => {
     expect(worm.hp).toBeLessThan(100);
   });
 
+  it('launches a hurt worm upward (explosion knockback)', () => {
+    const terrain = flatTerrain(200, 200, 100);
+    const worm = createWorm(60, 90, 'p2', 'Bob');
+    worm.vy = 0;
+    const projectile = createProjectile('bazooka', 60, 50, Math.PI / 2, 1);
+    let result: ProjectileUpdateResult | undefined;
+    for (let i = 0; i < 200 && !(result && result.exploded); i++) {
+      result = updateProjectile(projectile, terrain, [worm], 0, 1 / 60);
+    }
+    expect(result!.exploded).toBe(true);
+    expect(worm.vy).toBeLessThan(0);
+  });
+
   it('explodes when a fast bazooka crosses a worm within one frame', () => {
     const terrain = flatTerrain(2_000, 400, 390);
     const worm = createWorm(50, 50, 'p2', 'Bob');

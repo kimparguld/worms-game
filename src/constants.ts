@@ -30,3 +30,15 @@ export const WORLD_HEIGHT = 900; // px - same 16:9 ratio as the viewport, so the
 // left blank - also doubles as that screen's field placeholders, so the
 // label shown while empty always matches the name a blank field produces.
 export const DEFAULT_WORM_NAMES: [string, string, string, string] = ['W1', 'W2', 'W3', 'W4'];
+// px/s of upward launch per point of blast damage actually dealt (post
+// falloff), so a graze barely lifts a worm while a point-blank hit sends it
+// flying. Vertical only - vx gets re-clamped to WORM_MOVE_SPEED every
+// physics tick regardless of source, so a horizontal shove here would just
+// be crushed back down within a frame or two and never read as knockback.
+export const EXPLOSION_KNOCKBACK_PER_DAMAGE = 7;
+// A worm's death is itself a small blast - worms crowded around a kill are
+// at risk, same as standing near any other explosive. Deliberately weaker
+// than a purpose-built weapon (compare bazooka: 40/60) since it's a side
+// effect of every death, not something a player chose to detonate.
+export const DEATH_EXPLOSION_RADIUS = 35;
+export const DEATH_EXPLOSION_DAMAGE = 30;

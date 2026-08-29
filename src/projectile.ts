@@ -1,6 +1,6 @@
 import { integrateProjectile, calcDamage, WEAPONS } from './weapons.js';
 import { isSolid, carveCircle } from './terrain.js';
-import { takeDamage } from './worm.js';
+import { takeDamage, applyExplosionKnockback } from './worm.js';
 import { GRAVITY } from './constants.js';
 import type { Terrain, Worm, WeaponDef, WeaponKey, Projectile, ProjectileUpdateResult } from './types.js';
 
@@ -133,8 +133,11 @@ export function updateProjectile(
       projectile.x = collision.safeX;
       projectile.y = collision.safeY;
       if (def.bounces) {
-        projectile.vy = -projectile.vy * 0.5;
-        projectile.vx = projectile.vx * 0.5;
+        // Retains more energy per bounce than a "dead" 0.5/0.5 would, so a
+        // grenade visibly hops and rolls a few times before its fuse runs
+        // out instead of thudding to a stop after one bounce.
+        projectile.vy = -projectile.vy * 0.65;
+        projectile.vx = projectile.vx * 0.75;
       } else {
         projectile.vx = 0;
         projectile.vy = 0;
@@ -163,6 +166,9 @@ function explode(projectile: Projectile, terrain: Terrain, worms: Worm[], def: W
     if (!worm.alive) continue;
     const distance = Math.hypot(worm.x - projectile.x, worm.y - projectile.y);
     const damage = calcDamage(distance, def.blastRadius, def.maxDamage);
-    if (damage > 0) takeDamage(worm, damage);
+    if (damage > 0) {
+      takeDamage(worm, damage);
+      applyExplosionKnockback(worm, damage);
+    }
   }
 }
