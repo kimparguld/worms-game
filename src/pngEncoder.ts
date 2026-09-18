@@ -1,5 +1,4 @@
 import { deflateSync } from 'node:zlib';
-import { createHash } from 'node:crypto';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -57,11 +56,4 @@ export function encodePng(width: number, height: number, rgba: Uint8Array): Buff
     chunk('IDAT', idat),
     chunk('IEND', Buffer.alloc(0)),
   ]);
-}
-
-// Re-exported only so tests can assert determinism if ever needed; not used
-// by the encoder itself (PNG doesn't require a hash, this is a convenience
-// for the generator script's "did this placeholder already exist" check).
-export function sha1(buf: Buffer): string {
-  return createHash('sha1').update(buf).digest('hex');
 }

@@ -12,6 +12,7 @@ import {
   tracerAlpha,
   chargeBarLength,
   chargeBarColor,
+  DEPTH_BACKDROP,
 } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
@@ -32,7 +33,7 @@ import { WormRenderer } from '../render/WormRenderer.js';
 import { ProjectileRenderer } from '../render/ProjectileRenderer.js';
 import { EffectsRenderer } from '../render/EffectsRenderer.js';
 import { HudRenderer } from '../render/HudRenderer.js';
-import { ASSET_MANIFEST } from '../assetManifest.js';
+import { ASSET_MANIFEST, nineSliceInsets } from '../assetManifest.js';
 
 interface GameSceneData {
   team1Name?: string;
@@ -186,7 +187,7 @@ export class GameScene extends Phaser.Scene {
 
     // Static sky/cloud backdrop, added once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.
-    const sky = this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
+    const sky = this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT).setDepth(DEPTH_BACKDROP);
     this.worldObjects.push(sky);
 
     // DEVIATION FROM BRIEF (ordering): the brief's Step 3 listed
@@ -198,7 +199,9 @@ export class GameScene extends Phaser.Scene {
     // revealed where terrain has been dug or blown away down to the water
     // line. Constructing WaterRenderer first preserves that.
     this.waterRenderer = new WaterRenderer(this, this.worldObjects, WORLD_WIDTH, WORLD_HEIGHT, this.rt.terrain);
-    this.terrainRenderer = new TerrainRenderer(this, this.worldObjects, WORLD_WIDTH, WORLD_HEIGHT);
+    // The initial terrain is handed in so TerrainRenderer can scan it once for
+    // contiguous building runs (one facade TileSprite + mask per run).
+    this.terrainRenderer = new TerrainRenderer(this, this.worldObjects, WORLD_WIDTH, WORLD_HEIGHT, this.rt.terrain);
     this.effectsRenderer = new EffectsRenderer(this, this.worldObjects);
     // Between the effects layer and the projectiles, matching the old
     // drawScene ordering where the rope/tracer/aim lines were stroked after
@@ -213,8 +216,10 @@ export class GameScene extends Phaser.Scene {
     const hudPanelWidth = 220;
     const hudPanelHeight = 74;
     const hudPanelX = Math.round(width / 2 - hudPanelWidth / 2);
+    // Insets come from the manifest rather than being re-typed here, so
+    // hud_panel's declared nine-slice and the one actually rendered can't drift.
     const hudPanel = this.add
-      .nineslice(hudPanelX, 6, 'hud_panel', undefined, hudPanelWidth, hudPanelHeight, 10, 10, 10, 10)
+      .nineslice(hudPanelX, 6, 'hud_panel', undefined, hudPanelWidth, hudPanelHeight, ...nineSliceInsets('hud_panel'))
       .setOrigin(0, 0);
     this.uiObjects.push(hudPanel);
     this.hudRenderer = new HudRenderer(this, this.uiObjects, width);
@@ -324,12 +329,23 @@ export class GameScene extends Phaser.Scene {
 
     // Release the terrain mask textures' GPU memory when this scene shuts
     // down (on restart, or when EndScene takes over) instead of leaking it.
-    // TerrainRenderer creates these two world-sized CanvasTextures and also
+    // TerrainRenderer creates these world-sized CanvasTextures and also
     // removes any stale copies at construction, so this is belt-and-braces -
     // it just means a finished match doesn't sit on them until the next one
     // starts. (The old 'terrainTex' this replaced is gone with drawTerrain.)
+    //
+    // The per-building-run mask keys ('terrainBuildingMask0', ...1, ...) are
+    // matched by pattern rather than listed: how many runs a match has depends
+    // on that match's generated terrain, so the next match may create fewer of
+    // them and would leave this one's extras registered forever. The 1x1
+    // 'terrainEdgeOverlayBase' is deliberately kept - it is content-
+    // independent, so every match reuses the same one.
     this.events.once('shutdown', () => {
-      for (const key of ['terrainGroundMask', 'terrainBuildingMask']) {
+      const staleKeys = this.textures
+        .getTextureKeys()
+        .filter((key) => /^terrainBuildingMask\d+$/.test(key))
+        .concat('terrainGroundMask', 'terrainEdgeMask');
+      for (const key of staleKeys) {
         if (this.textures.exists(key)) this.textures.remove(key);
       }
       this.clearMobileTouchState();
@@ -512,6 +528,11 @@ export class GameScene extends Phaser.Scene {
     if (tracer && !this.burstedShotgunTracers.has(tracer)) {
       this.burstedShotgunTracers.add(tracer);
       soundSystem.play('shotgun');
+      // The muzzle itself, not just the impacts - the old drawScene filled a
+      // small bright circle at the tracer's origin as well as drawing each
+      // per-hit line, so without this the shot reads as damage appearing out
+      // of nowhere rather than as something leaving the barrel.
+      this.effectsRenderer.muzzleBurst(tracer.originX, tracer.originY);
       for (const hit of tracer.hits) this.effectsRenderer.muzzleBurst(hit.x, hit.y);
     }
     for (const stone of this.rt.gravestones) {

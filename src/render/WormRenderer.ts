@@ -13,6 +13,14 @@ const DEATH_WIGGLE_END_FRACTION = 0.8;
 const HAND_OFFSET = 11; // px along facing, past the head - matches the old handPosition() (src/render.ts:717-720)
 const HP_BAR_WIDTH = 28;
 const HP_BAR_HEIGHT = 6;
+// Deliberately NOT read from the manifest (unlike HudRenderer's team bars,
+// which do). 'health_bar_frame' declares 6/6/6/6, tuned for the ~20px-tall
+// team bars; this per-worm pill reuses the same source asset at less than half
+// that height (HP_BAR_HEIGHT + 4 = 10px), where a 6px top plus a 6px bottom
+// inset would exceed the display height and make the two slices overlap by
+// 2px - invisible on flat placeholder colour, visibly squashed with real frame
+// art. 2px a side leaves 6px of stretchable middle at this size.
+const HP_BAR_INSET = 2;
 
 export class WormRenderer {
   private sprite: Phaser.GameObjects.Sprite;
@@ -26,7 +34,18 @@ export class WormRenderer {
     this.sprite = scene.add.sprite(worm.x, worm.y, 'worm_idle').setOrigin(0.5, 0.5);
     this.headband = scene.add.image(worm.x, worm.y, 'worm_headband').setTint(TEAM_COLORS[team.playerId] ?? 0xdddddd);
     this.weaponImage = scene.add.image(worm.x, worm.y, 'bazooka_held').setVisible(false);
-    this.hpBarFrame = scene.add.nineslice(worm.x, worm.y, 'health_bar_frame', undefined, HP_BAR_WIDTH + 4, HP_BAR_HEIGHT + 4, 6, 6, 6, 6);
+    this.hpBarFrame = scene.add.nineslice(
+      worm.x,
+      worm.y,
+      'health_bar_frame',
+      undefined,
+      HP_BAR_WIDTH + 4,
+      HP_BAR_HEIGHT + 4,
+      HP_BAR_INSET,
+      HP_BAR_INSET,
+      HP_BAR_INSET,
+      HP_BAR_INSET,
+    );
     this.hpBarFill = scene.add.rectangle(worm.x, worm.y, HP_BAR_WIDTH, HP_BAR_HEIGHT, 0x6fbf4a).setOrigin(0, 0.5);
     worldObjects.push(this.sprite, this.headband, this.weaponImage, this.hpBarFrame, this.hpBarFill);
   }

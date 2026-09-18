@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import type { Gravestone } from '../types.js';
+import { DEPTH_BEHIND_WORMS } from '../render.js';
 
 export class EffectsRenderer {
   private emberEmitter: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -81,6 +81,9 @@ export class EffectsRenderer {
     );
   }
 
+  // The one effect that deliberately keeps the default depth 0: created
+  // mid-match, an explosion lands at the front of the display list, which is
+  // exactly where the old drawScene drew it (last of everything).
   spawnExplosion(x: number, y: number, radius: number): void {
     const sprite = this.scene.add.sprite(x, y, 'fx_explosion');
     sprite.setScale(Phaser.Math.Clamp(radius / 40, 0.5, 3));
@@ -92,7 +95,10 @@ export class EffectsRenderer {
   }
 
   spawnSplash(x: number, y: number): void {
-    const sprite = this.scene.add.sprite(x, y, 'fx_splash');
+    // Splashes and gravestones are created mid-match, so without an explicit
+    // depth they would sort in front of the worms - the old drawScene drew
+    // both *under* them. See the depth bands in src/render.ts.
+    const sprite = this.scene.add.sprite(x, y, 'fx_splash').setDepth(DEPTH_BEHIND_WORMS);
     sprite.play('splash');
     sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => sprite.destroy());
     this.worldObjects.push(sprite);
@@ -104,7 +110,7 @@ export class EffectsRenderer {
   }
 
   spawnGravestone(x: number, y: number): void {
-    const image = this.scene.add.image(x, y, 'gravestone');
+    const image = this.scene.add.image(x, y, 'gravestone').setDepth(DEPTH_BEHIND_WORMS);
     this.gravestoneImages.push(image);
     this.worldObjects.push(image);
   }
@@ -123,14 +129,5 @@ export class EffectsRenderer {
   setRopeHook(visible: boolean, x?: number, y?: number): void {
     this.ropeHook.setVisible(visible);
     if (visible && x !== undefined && y !== undefined) this.ropeHook.setPosition(x, y);
-  }
-
-  // Present for API symmetry with the old drawGravestones taking a full
-  // array - GameScene calls spawnGravestone once per new Gravestone (Task
-  // 11's identity-tracked burst pattern) rather than passing the whole array
-  // here, so this method only needs to exist if a future caller wants a
-  // one-shot "replay every known gravestone" path (e.g. scene restart).
-  replayGravestones(gravestones: Gravestone[]): void {
-    for (const stone of gravestones) this.spawnGravestone(stone.x, stone.y);
   }
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ASSET_MANIFEST } from '../src/assetManifest.js';
+import { WEAPON_KEYS } from '../src/matchLoop.js';
 
 describe('ASSET_MANIFEST', () => {
   it('has no duplicate keys', () => {
@@ -32,13 +33,13 @@ describe('ASSET_MANIFEST', () => {
     }
   });
 
+  // WEAPON_KEYS is imported rather than re-typed as literals: an 11th weapon
+  // added to matchLoop with no art in the manifest has to fail here, which a
+  // hardcoded list of ten would happily let through.
   it('includes a held image and a projectile image for every weapon key', () => {
-    const weaponKeys = [
-      'bazooka', 'grenade', 'shotgun', 'ninjaRope', 'dynamite',
-      'sniperRifle', 'airstrikeRocket', 'holyHandGrenade', 'mine', 'drill',
-    ];
     const keys = new Set(ASSET_MANIFEST.map((e) => e.key));
-    for (const w of weaponKeys) {
+    expect(WEAPON_KEYS.length).toBeGreaterThan(0);
+    for (const w of WEAPON_KEYS) {
       expect(keys.has(`${w}_held`)).toBe(true);
       expect(keys.has(`${w}_projectile`)).toBe(true);
     }

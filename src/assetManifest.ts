@@ -204,3 +204,17 @@ export const ASSET_MANIFEST: AssetManifestEntry[] = [
   // --- Missing-texture fallback (Task 3) ---
   { key: 'missing_texture', kind: 'image', path: 'assets/missing_texture.png', width: 16, height: 16, placeholderColor: 0xff00ff },
 ];
+
+// The nine-slice insets declared for `key`, already ordered as the positional
+// leftWidth/rightWidth/topHeight/bottomHeight tail of Phaser's
+// `scene.add.nineslice(...)`, so a call site can spread it instead of
+// re-typing four numbers that then silently drift from this manifest.
+//
+// Throws rather than falling back to zeros: a missing/malformed entry is a
+// manifest bug, and zero insets would render as a plain stretched image that
+// looks *almost* right - the worst possible failure mode to debug later.
+export function nineSliceInsets(key: string): [number, number, number, number] {
+  const insets = ASSET_MANIFEST.find((entry) => entry.key === key)?.nineSlice;
+  if (!insets) throw new Error(`nineSliceInsets: manifest entry "${key}" declares no nineSlice insets`);
+  return [insets.leftWidth, insets.rightWidth, insets.topHeight, insets.bottomHeight];
+}

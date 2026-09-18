@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { waterLevelY } from '../terrain.js';
 import type { Terrain } from '../types.js';
+import { DEPTH_BACKDROP } from '../render.js';
 
 const SCROLL_PX_PER_SECOND = 18;
 
@@ -12,7 +13,7 @@ export class WaterRenderer {
 
   constructor(scene: Phaser.Scene, worldObjects: Phaser.GameObjects.GameObject[], width: number, height: number, terrain: Terrain) {
     const waterY = waterLevelY(terrain);
-    this.tileSprite = scene.add.tileSprite(0, waterY, width, height - waterY, 'water').setOrigin(0, 0);
+    this.tileSprite = scene.add.tileSprite(0, waterY, width, height - waterY, 'water').setOrigin(0, 0).setDepth(DEPTH_BACKDROP);
     worldObjects.push(this.tileSprite);
   }
 

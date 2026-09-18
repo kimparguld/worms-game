@@ -6,6 +6,24 @@ import type { MatchState, WeaponKey, Team } from './types.js';
 
 export const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
 
+// Display-list depth bands.
+//
+// Phaser sorts the display list by `depth` first and falls back to insertion
+// order only *within* one depth, and every Game Object starts at depth 0. That
+// makes insertion order the whole z-order for this scene - which is fine for
+// everything built up front in GameScene.create(), and wrong for anything
+// created mid-match: a gravestone or splash spawned on frame 4000 lands at the
+// very front, on top of the worms, even though the old drawScene drew both
+// underneath them.
+//
+// Two bands are enough to fix that. The static backdrop (sky, water, terrain
+// layers) sinks to DEPTH_BACKDROP, which opens up DEPTH_BEHIND_WORMS as a slot
+// that is above the backdrop but below the default 0 that worms, projectiles,
+// explosions, the aim/rope lines and the HUD all keep. Explosions deliberately
+// stay at the default so they still draw on top, as they did before.
+export const DEPTH_BACKDROP = -20;
+export const DEPTH_BEHIND_WORMS = -10;
+
 // CSS-hex form of TEAM_COLORS, for the DOM/Phaser.Text styling APIs that
 // take a string instead of the numeric fill color Graphics calls use.
 export function teamColorCss(playerId: string): string {
