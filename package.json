@@ -8,12 +8,14 @@
     "typecheck": "tsc --noEmit",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate-placeholder-art": "vite-node scripts/generate-placeholder-art.mjs"
   },
   "dependencies": {
     "phaser": "^4.2.1"
   },
   "devDependencies": {
+    "@types/node": "^26.6.1",
     "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
     "vite": "^5.4.21",
