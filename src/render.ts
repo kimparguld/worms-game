@@ -635,7 +635,7 @@ export function drawWater(graphics: Phaser.GameObjects.Graphics, width: number, 
 // (an underside shade ellipse, a glossy highlight) rather than hard black
 // outlines - a thin, low-alpha line is used only where two similarly-toned
 // shapes would otherwise merge (eyes against the head).
-const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
+export const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
 
 // CSS-hex form of TEAM_COLORS, for the DOM/Phaser.Text styling APIs that
 // take a string instead of the numeric fill color Graphics calls use.
