@@ -2,26 +2,37 @@ import Phaser from 'phaser';
 import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../matchLoop.js';
 import { checkWinner, currentWorm } from '../game.js';
 import {
-  drawTerrain,
-  drawScene,
   updateHud,
-  drawSky,
-  drawWater,
   turnBannerAlpha,
   turnBannerLabel,
   weaponLabel,
-  drawTeamHealthBars,
   teamHealthBarX,
   TEAM_BAR_WIDTH,
-  drawPanelGrain,
   teamColorCss,
+  tracerAlpha,
+  chargeBarLength,
+  chargeBarColor,
 } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
-import { TURN_BANNER_DURATION_MS, WORLD_WIDTH, WORLD_HEIGHT, DEFAULT_WORM_NAMES } from '../constants.js';
+import {
+  TURN_BANNER_DURATION_MS,
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
+  DEFAULT_WORM_NAMES,
+  DEATH_ANIM_DURATION_MS,
+  SHOTGUN_TRACER_DURATION,
+} from '../constants.js';
 import { soundSystem } from '../sound.js';
 import { aimWormAtPoint, isMobileDevice } from '../mobile.js';
 import type { Worm, MatchRuntime } from '../types.js';
+import { TerrainRenderer } from '../render/TerrainRenderer.js';
+import { WaterRenderer } from '../render/WaterRenderer.js';
+import { WormRenderer } from '../render/WormRenderer.js';
+import { ProjectileRenderer } from '../render/ProjectileRenderer.js';
+import { EffectsRenderer } from '../render/EffectsRenderer.js';
+import { HudRenderer } from '../render/HudRenderer.js';
+import { ASSET_MANIFEST } from '../assetManifest.js';
 
 interface GameSceneData {
   team1Name?: string;
@@ -42,20 +53,23 @@ export class GameScene extends Phaser.Scene {
   private team2Name = 'Team 2';
   private wormNames: [string, string, string, string] = DEFAULT_WORM_NAMES;
 
-  private terrainTexture!: Phaser.Textures.CanvasTexture;
-  private waterGraphics!: Phaser.GameObjects.Graphics;
-  private graphics!: Phaser.GameObjects.Graphics;
-  private uiGraphics!: Phaser.GameObjects.Graphics;
+  private terrainRenderer!: TerrainRenderer;
+  private waterRenderer!: WaterRenderer;
+  private effectsRenderer!: EffectsRenderer;
+  private projectileRenderer!: ProjectileRenderer;
+  private wormRenderers = new Map<Worm, WormRenderer>();
+  // The one deliberate remaining Graphics object: the rope line, the shotgun
+  // tracer line and the aim/charge indicator line are all thin, arbitrary-
+  // length, arbitrary-angle lines redrawn every frame, which the design spec
+  // keeps as vector strokes rather than forcing into stretched sprites.
+  private ropeGraphics!: Phaser.GameObjects.Graphics;
+  private hudRenderer!: HudRenderer;
   private uiCamera!: Phaser.Cameras.Scene2D.Camera;
   private hudText!: Phaser.GameObjects.Text;
   private turnBannerText!: Phaser.GameObjects.Text;
 
-  private emberEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private debrisEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private splashEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private muzzleEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
-  private dustEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private activeWormArrow!: Phaser.GameObjects.Image;
+  private crosshairImage!: Phaser.GameObjects.Image;
   // One label per worm, created once at match start (the roster is fixed -
   // worms die, they're never added) and repositioned/hidden each frame in
   // update() rather than recreated.
@@ -74,6 +88,8 @@ export class GameScene extends Phaser.Scene {
   private burstedSplashes = new WeakSet<object>();
   private burstedProjectiles = new WeakSet<object>();
   private burstedShotgunTracers = new WeakSet<object>();
+  private burstedGravestones = new WeakSet<object>();
+  private poofedWorms = new WeakSet<Worm>();
   private bannerWasVisible = false;
   private wasCharging = false;
   private movementPointerId: number | null = null;
@@ -95,6 +111,16 @@ export class GameScene extends Phaser.Scene {
   // left off both arrays would render on *both* cameras, doubled up.
   private worldObjects: Phaser.GameObjects.GameObject[] = [];
   private uiObjects: Phaser.GameObjects.GameObject[] = [];
+  // How many entries of worldObjects have already been handed to
+  // uiCamera.ignore(). Camera.ignore() stamps a filter onto the objects it is
+  // given at that moment, so the one-shot call at the end of create() cannot
+  // cover the objects the renderers add *later* - EffectsRenderer's one-shot
+  // explosion/splash sprites and gravestones, and ProjectileRenderer's lazily
+  // pooled images. Anything missed would render on both cameras, i.e. a second
+  // unzoomed copy pinned to the screen. ignoreNewWorldObjects() (called once
+  // per frame) re-ignores only the new tail, so the cost is proportional to
+  // what was just added, not to the whole list.
+  private ignoredWorldObjectCount = 0;
 
   constructor() {
     super('GameScene');
@@ -108,6 +134,31 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     resetInputState(sharedInput);
+
+    // Every spritesheet animation in the manifest, registered once on the
+    // game-global AnimationManager. Worm animations are keyed by their
+    // manifest texture key ('worm_idle', 'worm_walk', ...) because
+    // WormRenderer.playAnimation plays `worm_${state}`; every other
+    // spritesheet's animation is keyed by its own anim.name ('explode',
+    // 'splash'), which is what EffectsRenderer plays. The real key is computed
+    // up front so the "already registered" guard tests the same key create()
+    // would otherwise re-create. fx_muzzle/fx_dust carry no `animations` array
+    // and fall out of the guard below - their emitters pick a random frame
+    // straight from the sheet instead of playing an animation.
+    for (const entry of ASSET_MANIFEST) {
+      if (entry.kind !== 'spritesheet' || !entry.animations) continue;
+      for (const anim of entry.animations) {
+        const key = entry.key.startsWith('worm_') ? entry.key : anim.name;
+        if (this.anims.exists(key)) continue; // create() reruns across StartScene -> GameScene restarts; the global anim manager persists, don't recreate
+        this.anims.create({
+          key,
+          frames: this.anims.generateFrameNumbers(entry.key, { frames: anim.frames }),
+          frameRate: anim.frameRate,
+          repeat: anim.repeat,
+        });
+      }
+    }
+
     // Phaser reuses this Scene instance across restarts (StartScene ->
     // GameScene -> EndScene -> StartScene -> GameScene...), so create() runs
     // more than once over the scene's lifetime while these two arrays are
@@ -117,6 +168,14 @@ export class GameScene extends Phaser.Scene {
     // objects - an unbounded leak, and a growing list for every .ignore() call.
     this.worldObjects = [];
     this.uiObjects = [];
+    this.ignoredWorldObjectCount = 0;
+    // Same reasoning for the two per-worm Maps: a rematch builds a brand new
+    // roster of Worm objects, so every entry keyed by the previous match's
+    // worms is dead weight whose GameObjects have already been destroyed with
+    // the old scene - and update() walks both Maps every frame, so a stale
+    // WormRenderer would keep poking at destroyed sprites.
+    this.wormRenderers.clear();
+    this.wormNameTexts.clear();
     this.input.once('pointerdown', () => this.unlockAudio());
     this.input.once('pointerdown', () => this.enterMobileFullscreen());
     this.input.on('pointerdown', this.handlePointerDown, this);
@@ -125,46 +184,40 @@ export class GameScene extends Phaser.Scene {
     const { width, height } = this.scale; // viewport size - UI-space layout only
     this.rt = createMatchRuntime(WORLD_WIDTH, WORLD_HEIGHT, this.team1Name, this.team2Name, this.wormNames);
 
-    // Static sky/cloud backdrop, drawn once - it never changes during a
+    // Static sky/cloud backdrop, added once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.
-    const sky = this.add.graphics();
-    drawSky(sky, WORLD_WIDTH, WORLD_HEIGHT);
+    const sky = this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
     this.worldObjects.push(sky);
 
-    // Sits behind the terrain layer (added next) so it's only visible where
-    // terrain has been dug/blown away down to the water line; redrawn every
-    // frame in update() so its surface highlight can animate.
-    this.waterGraphics = this.add.graphics();
-    drawWater(this.waterGraphics, WORLD_WIDTH, WORLD_HEIGHT, 0);
-    this.worldObjects.push(this.waterGraphics);
-
-    if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
-    // Non-null: the line above always removes any colliding key first, so
-    // createCanvas never actually returns null here.
-    this.terrainTexture = this.textures.createCanvas('terrainTex', WORLD_WIDTH, WORLD_HEIGHT)!;
-    const terrainImage = this.add.image(0, 0, 'terrainTex').setOrigin(0, 0);
-    this.worldObjects.push(terrainImage);
-
-    this.graphics = this.add.graphics();
-    this.worldObjects.push(this.graphics);
-
-    this.uiGraphics = this.add.graphics();
-    this.uiObjects.push(this.uiGraphics);
+    // DEVIATION FROM BRIEF (ordering): the brief's Step 3 listed
+    // TerrainRenderer before WaterRenderer, which would put the water band in
+    // front of the terrain and leave an opaque blue strip permanently covering
+    // the bottom of the map. Display-list order is z-order here, and the
+    // behaviour being replaced (the old drawSky/drawWater/drawTerrain
+    // sequence) deliberately put water *behind* terrain so it is only ever
+    // revealed where terrain has been dug or blown away down to the water
+    // line. Constructing WaterRenderer first preserves that.
+    this.waterRenderer = new WaterRenderer(this, this.worldObjects, WORLD_WIDTH, WORLD_HEIGHT, this.rt.terrain);
+    this.terrainRenderer = new TerrainRenderer(this, this.worldObjects, WORLD_WIDTH, WORLD_HEIGHT);
+    this.effectsRenderer = new EffectsRenderer(this, this.worldObjects);
+    // Between the effects layer and the projectiles, matching the old
+    // drawScene ordering where the rope/tracer/aim lines were stroked after
+    // the gravestones and splashes but before the worms and projectiles.
+    this.ropeGraphics = this.add.graphics();
+    this.worldObjects.push(this.ropeGraphics);
+    this.projectileRenderer = new ProjectileRenderer(this, this.worldObjects);
 
     // The HUD panel sits top-centre, in the gap between the two team life
-    // bars (which are anchored to the left and right edges by
-    // drawTeamHealthBars). Top-left would sit directly on top of the first
-    // team's bar and hide it.
+    // bars (which HudRenderer anchors to the left and right edges). Top-left
+    // would sit directly on top of the first team's bar and hide it.
     const hudPanelWidth = 220;
     const hudPanelHeight = 74;
     const hudPanelX = Math.round(width / 2 - hudPanelWidth / 2);
-    const hudPanel = this.add.graphics();
-    hudPanel.fillStyle(0x16213f, 0.72);
-    hudPanel.fillRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
-    drawPanelGrain(hudPanel, hudPanelX, 6, hudPanelWidth, hudPanelHeight, 907);
-    hudPanel.lineStyle(2, 0xffffff, 0.15);
-    hudPanel.strokeRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 10);
+    const hudPanel = this.add
+      .nineslice(hudPanelX, 6, 'hud_panel', undefined, hudPanelWidth, hudPanelHeight, 10, 10, 10, 10)
+      .setOrigin(0, 0);
     this.uiObjects.push(hudPanel);
+    this.hudRenderer = new HudRenderer(this, this.uiObjects, width);
 
     this.hudText = this.add.text(hudPanelX + 14, 16, '', {
       fontFamily: "'Baloo 2', sans-serif",
@@ -201,47 +254,20 @@ export class GameScene extends Phaser.Scene {
       this.uiObjects.push(teamNameText);
     });
 
-    this.createParticleEmitters();
-    this.worldObjects.push(
-      this.emberEmitter,
-      this.debrisEmitter,
-      this.splashEmitter,
-      this.muzzleEmitter,
-      this.dustEmitter,
-    );
-
-    // A bouncing "it's your turn" arrow above the active worm's head - a
-    // dedicated Image using a procedurally-drawn signpost-arrow texture, in
-    // the same style as the game's other bold-outline shapes (dark stroke
-    // around a bright fill). Hidden the instant the player starts moving
-    // that worm (see updateActiveWormArrow), so it only ever marks "it's
-    // your turn and you haven't acted yet", not the active worm generally.
-    if (!this.textures.exists('turnArrow')) {
-      const w = 26;
-      const h = 30;
-      const arrow = this.textures.createCanvas('turnArrow', w, h)!;
-      const ctx = arrow.context;
-      ctx.fillStyle = '#ffd966';
-      ctx.strokeStyle = '#8a5a1e';
-      ctx.lineWidth = 2.5;
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(w / 2 - 4, 2);
-      ctx.lineTo(w / 2 + 4, 2);
-      ctx.lineTo(w / 2 + 4, h * 0.45);
-      ctx.lineTo(w / 2 + 11, h * 0.45);
-      ctx.lineTo(w / 2, h - 2);
-      ctx.lineTo(w / 2 - 11, h * 0.45);
-      ctx.lineTo(w / 2 - 4, h * 0.45);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      arrow.refresh();
-    }
+    // A bouncing "it's your turn" arrow above the active worm's head. Hidden
+    // the instant the player starts moving that worm (see
+    // updateActiveWormArrow), so it only ever marks "it's your turn and you
+    // haven't acted yet", not the active worm generally.
     // Origin (0.5, 1): position sets the arrow's tip, so it's trivial to
     // pin just above a worm's head regardless of the texture's own height.
-    this.activeWormArrow = this.add.image(0, 0, 'turnArrow').setOrigin(0.5, 1);
+    this.activeWormArrow = this.add.image(0, 0, 'turn_arrow').setOrigin(0.5, 1);
     this.worldObjects.push(this.activeWormArrow);
+
+    // Added before the worm sprites below so it sits behind them, matching the
+    // old drawScene, which stroked the crosshair/charge indicator before the
+    // worm pass.
+    this.crosshairImage = this.add.image(0, 0, 'crosshair').setVisible(false);
+    this.worldObjects.push(this.crosshairImage);
 
     for (const team of this.rt.teams) {
       for (const worm of team.worms) {
@@ -257,6 +283,8 @@ export class GameScene extends Phaser.Scene {
           .setOrigin(0.5, 1);
         this.wormNameTexts.set(worm, nameText);
         this.worldObjects.push(nameText);
+
+        this.wormRenderers.set(worm, new WormRenderer(this, this.worldObjects, worm, team));
       }
     }
 
@@ -275,6 +303,7 @@ export class GameScene extends Phaser.Scene {
     this.uiCamera.setScroll(0, 0);
     this.cameras.main.ignore(this.uiObjects);
     this.uiCamera.ignore(this.worldObjects);
+    this.ignoredWorldObjectCount = this.worldObjects.length;
 
     // Zoom the main camera out just enough that the whole (larger) world
     // fits the viewport - world and viewport share a 16:9 ratio, so one
@@ -293,10 +322,16 @@ export class GameScene extends Phaser.Scene {
     // changes from the original (0,0).
     this.cameras.main.setScroll((WORLD_WIDTH - width) / 2, (WORLD_HEIGHT - height) / 2);
 
-    // Release the terrain texture's GPU memory when this scene shuts down
-    // (on restart, or when EndScene takes over) instead of leaking it.
+    // Release the terrain mask textures' GPU memory when this scene shuts
+    // down (on restart, or when EndScene takes over) instead of leaking it.
+    // TerrainRenderer creates these two world-sized CanvasTextures and also
+    // removes any stale copies at construction, so this is belt-and-braces -
+    // it just means a finished match doesn't sit on them until the next one
+    // starts. (The old 'terrainTex' this replaced is gone with drawTerrain.)
     this.events.once('shutdown', () => {
-      if (this.textures.exists('terrainTex')) this.textures.remove('terrainTex');
+      for (const key of ['terrainGroundMask', 'terrainBuildingMask']) {
+        if (this.textures.exists(key)) this.textures.remove(key);
+      }
       this.clearMobileTouchState();
     });
   }
@@ -443,73 +478,16 @@ export class GameScene extends Phaser.Scene {
     this.scale.startFullscreen();
   }
 
-  // One shared 8x8 white dot texture, tinted per-emitter - cheaper than a
-  // separate generated texture per effect, and tinting is all these bursts
-  // need since they're flat-colored particles, not sprite art.
-  private createParticleEmitters(): void {
-    if (!this.textures.exists('particleDot')) {
-      const dot = this.make.graphics({ x: 0, y: 0 });
-      dot.fillStyle(0xffffff, 1);
-      dot.fillCircle(4, 4, 4);
-      dot.generateTexture('particleDot', 8, 8);
-      dot.destroy();
-    }
-
-    this.emberEmitter = this.add.particles(0, 0, 'particleDot', {
-      lifespan: 450,
-      speed: { min: 60, max: 240 },
-      scale: { start: 1.2, end: 0 },
-      tint: [0xfff2b0, 0xffb347, 0xff5a1a],
-      blendMode: Phaser.BlendModes.ADD,
-      emitting: false,
-    });
-    this.debrisEmitter = this.add.particles(0, 0, 'particleDot', {
-      lifespan: 700,
-      speed: { min: 40, max: 160 },
-      angle: { min: -150, max: -30 },
-      gravityY: 500,
-      scale: { start: 0.9, end: 0.2 },
-      tint: [0x96622e, 0x6b4523],
-      emitting: false,
-    });
-    this.splashEmitter = this.add.particles(0, 0, 'particleDot', {
-      lifespan: 500,
-      speed: { min: 60, max: 180 },
-      angle: { min: -150, max: -30 },
-      gravityY: 700,
-      scale: { start: 0.8, end: 0.1 },
-      tint: [0xdff3fb, 0x8fd8f7],
-      emitting: false,
-    });
-    this.muzzleEmitter = this.add.particles(0, 0, 'particleDot', {
-      lifespan: 160,
-      speed: { min: 30, max: 120 },
-      scale: { start: 1, end: 0 },
-      tint: [0xfff2b0, 0xffb347],
-      blendMode: Phaser.BlendModes.ADD,
-      emitting: false,
-    });
-    this.dustEmitter = this.add.particles(0, 0, 'particleDot', {
-      lifespan: 320,
-      speed: { min: 8, max: 34 },
-      angle: { min: -160, max: -20 },
-      gravityY: 260,
-      scale: { start: 0.45, end: 0 },
-      tint: [0xc9a876, 0x9c7b4d],
-      emitting: false,
-    });
-  }
-
-  // Fires the one-shot particle burst + camera shake for any explosion or
-  // splash that appeared since the last frame. Identity (not value) based,
+  // Fires the one-shot effect sprite/particle burst + camera shake for any
+  // explosion, splash, projectile, tracer, gravestone or completed death
+  // animation that appeared since the last frame. Identity (not value) based,
   // see burstedExplosions/burstedSplashes field comment.
   private triggerEffectBursts(): void {
     for (const ex of this.rt.explosions) {
       if (this.burstedExplosions.has(ex)) continue;
       this.burstedExplosions.add(ex);
       soundSystem.play('explosion');
-      this.emberEmitter.explode(18, ex.x, ex.y);
-      this.debrisEmitter.explode(10, ex.x, ex.y);
+      this.effectsRenderer.spawnExplosion(ex.x, ex.y, ex.radius);
       const intensity = Phaser.Math.Clamp(ex.radius / 900, 0.002, 0.012);
       this.cameras.main.shake(180, intensity);
       // Warm, brief screen flash so a big dynamite blast reads as a flash of
@@ -522,18 +500,35 @@ export class GameScene extends Phaser.Scene {
       if (this.burstedSplashes.has(sp)) continue;
       this.burstedSplashes.add(sp);
       soundSystem.play('splash');
-      this.splashEmitter.explode(14, sp.x, sp.y);
+      this.effectsRenderer.spawnSplash(sp.x, sp.y);
     }
     for (const p of this.rt.projectiles) {
       if (this.burstedProjectiles.has(p)) continue;
       this.burstedProjectiles.add(p);
       soundSystem.play('fire');
-      this.muzzleEmitter.explode(8, p.x, p.y);
+      this.effectsRenderer.muzzleBurst(p.x, p.y);
     }
     const tracer = this.rt.shotgunTracer;
     if (tracer && !this.burstedShotgunTracers.has(tracer)) {
       this.burstedShotgunTracers.add(tracer);
       soundSystem.play('shotgun');
+      for (const hit of tracer.hits) this.effectsRenderer.muzzleBurst(hit.x, hit.y);
+    }
+    for (const stone of this.rt.gravestones) {
+      if (this.burstedGravestones.has(stone)) continue;
+      this.burstedGravestones.add(stone);
+      this.effectsRenderer.spawnGravestone(stone.x, stone.y);
+    }
+    // The poof fires at the exact moment WormRenderer stops drawing the death
+    // wiggle and hides the sprite - the same DEATH_ANIM_DURATION_MS / 0.8
+    // threshold it applies internally - so the sprite vanishing and the puff
+    // of smoke replacing it land on the same frame.
+    for (const worm of this.allWorms()) {
+      if (!worm.dying || this.poofedWorms.has(worm)) continue;
+      const elapsed = DEATH_ANIM_DURATION_MS - (worm.deathTimer ?? 0);
+      if (elapsed / DEATH_ANIM_DURATION_MS < 0.8) continue;
+      this.poofedWorms.add(worm);
+      this.effectsRenderer.spawnPoof(worm.x, worm.y);
     }
   }
 
@@ -546,10 +541,75 @@ export class GameScene extends Phaser.Scene {
     for (const worm of this.allWorms()) {
       if (!worm.alive || worm.dying || !worm.onGround) continue;
       if (Math.abs(worm.vx) < 15) continue;
-      this.dustEmitter.explode(2, worm.x - worm.facing * 8, worm.y + 12);
+      this.effectsRenderer.dustBurst(worm.x - worm.facing * 8, worm.y + 12);
       this.dustCooldownMs = 90;
       break;
     }
+  }
+
+  // The rope line, the shotgun tracer line and the active worm's aim/charge
+  // indicator - the three pieces of the old drawScene that stay hand-stroked
+  // vector lines (arbitrary length and angle every frame, per the design
+  // spec's stated exception for the rope). The round caps the old code drew at
+  // each end are sprites now: the rope's anchor is EffectsRenderer's rope_hook
+  // Image, each tracer hit gets a muzzle burst from triggerEffectBursts, and
+  // the aim indicator's tip is the crosshair Image.
+  private updateRopeAndTracer(active: { worm: Worm }): void {
+    this.ropeGraphics.clear();
+    const rope = this.rt.rope;
+    if (rope && rope.anchorX != null && rope.anchorY != null && active.worm.alive) {
+      const worm = active.worm;
+      this.ropeGraphics.lineStyle(5, 0x2f2514, 0.22);
+      this.ropeGraphics.lineBetween(worm.x + 1, worm.y + 1, rope.anchorX + 1, rope.anchorY + 1);
+      this.ropeGraphics.lineStyle(2.5, 0xc49a55, 1);
+      this.ropeGraphics.lineBetween(worm.x, worm.y, rope.anchorX, rope.anchorY);
+      this.effectsRenderer.setRopeHook(true, rope.anchorX, rope.anchorY);
+    } else {
+      this.effectsRenderer.setRopeHook(false);
+    }
+
+    const tracer = this.rt.shotgunTracer;
+    if (tracer) {
+      const alpha = tracerAlpha(tracer.timer, SHOTGUN_TRACER_DURATION);
+      for (const hit of tracer.hits) {
+        this.ropeGraphics.lineStyle(5, 0xff9d42, alpha * 0.18);
+        this.ropeGraphics.lineBetween(tracer.originX, tracer.originY, hit.x, hit.y);
+        this.ropeGraphics.lineStyle(2, 0xfff2b0, alpha);
+        this.ropeGraphics.lineBetween(tracer.originX, tracer.originY, hit.x, hit.y);
+      }
+    }
+
+    // Skipped for bazooka/shotgun while just aiming (not charging) - their
+    // held-weapon sprite already points along the aim angle, so the crosshair
+    // would be redundant clutter; the charge bar still matters and stays.
+    const activeWeaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
+    const weaponHasOwnAimIndicator = activeWeaponKey === 'bazooka' || activeWeaponKey === 'shotgun';
+    if (active.worm.alive && (this.rt.charging || !weaponHasOwnAimIndicator)) {
+      const worm = active.worm;
+      const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
+      const innerRadius = 16;
+      const outerRadius = this.rt.charging ? innerRadius + chargeBarLength(this.rt.chargePower) : 28;
+      const color = this.rt.charging ? chargeBarColor(this.rt.chargePower) : 0xffd966;
+      const startX = worm.x + Math.cos(fireAngle) * innerRadius;
+      const startY = worm.y + Math.sin(fireAngle) * innerRadius;
+      const endX = worm.x + Math.cos(fireAngle) * outerRadius;
+      const endY = worm.y + Math.sin(fireAngle) * outerRadius;
+      this.ropeGraphics.lineStyle(this.rt.charging ? 4 : 2.5, color, 0.95);
+      this.ropeGraphics.lineBetween(startX, startY, endX, endY);
+      this.crosshairImage.setPosition(endX, endY).setTint(color).setVisible(true);
+    } else {
+      this.crosshairImage.setVisible(false);
+    }
+  }
+
+  // See the ignoredWorldObjectCount field comment: Camera.ignore() only marks
+  // the objects handed to it, so the renderers' lazily-created world objects
+  // need the ignore re-applied to the newly appended tail.
+  private ignoreNewWorldObjects(): void {
+    if (this.worldObjects.length === this.ignoredWorldObjectCount) return;
+    const added = this.worldObjects.slice(this.ignoredWorldObjectCount);
+    this.ignoredWorldObjectCount = this.worldObjects.length;
+    this.uiCamera.ignore(added);
   }
 
   update(time: number, delta: number): void {
@@ -558,31 +618,27 @@ export class GameScene extends Phaser.Scene {
     if (this.rt.charging && !this.wasCharging) soundSystem.play('charge');
     this.wasCharging = this.rt.charging;
 
-    drawWater(this.waterGraphics, WORLD_WIDTH, WORLD_HEIGHT, time);
-    drawTerrain(this.terrainTexture, this.rt.terrain);
-    drawScene(
-      this.graphics,
-      this.allWorms(),
-      this.rt.projectiles,
-      this.rt.match,
-      this.rt.rope,
-      this.rt.charging,
-      this.rt.chargePower,
-      this.rt.gravestones,
-      this.rt.shotgunTracer,
-      WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka',
-      time,
-      this.rt.explosions,
-      this.rt.splashes,
-      this.rt.terrain,
-    );
-    drawTeamHealthBars(this.uiGraphics, this.rt.teams, this.scale.width);
+    this.waterRenderer.update(time);
+    this.terrainRenderer.update(this.rt.terrain);
+
+    const activeWeaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
+    const active = currentWorm(this.rt.match);
+    for (const [worm, renderer] of this.wormRenderers) {
+      const isActive = worm === active.worm;
+      renderer.update(worm, isActive, isActive ? activeWeaponKey : undefined, this.rt.terrain, time);
+    }
+    this.projectileRenderer.update(this.rt.projectiles);
+    this.updateRopeAndTracer(active);
+    this.hudRenderer.update(this.rt.teams);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
     this.updateMobileWeaponLabel();
     this.triggerEffectBursts();
     this.triggerMovementDust(delta);
     this.updateActiveWormArrow(time);
     this.updateWormNameTexts();
+    // Last, so it also catches whatever this frame's bursts/pool growth just
+    // added to worldObjects before the cameras render it.
+    this.ignoreNewWorldObjects();
 
     const bannerAlpha = turnBannerAlpha(this.rt.turnBannerTimer ?? 0, TURN_BANNER_DURATION_MS);
     this.turnBannerText.setAlpha(bannerAlpha);
