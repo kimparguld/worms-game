@@ -1,5 +1,4 @@
 import Phaser from 'phaser';
-import { drawSky } from '../render.js';
 
 interface EndSceneData {
   winner?: string;
@@ -24,9 +23,7 @@ export class EndScene extends Phaser.Scene {
     const centerX = this.scale.width / 2;
     const centerY = this.scale.height / 2;
 
-    const sky = this.add.graphics();
-    drawSky(sky, this.scale.width, this.scale.height);
-    sky.setAlpha(0.35);
+    this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(this.scale.width, this.scale.height).setAlpha(0.35);
 
     const winnerColors: Record<string, string> = { p1: '#2fbfae', p2: '#e85d75' };
     const labelColor = winnerColors[this.winner] ?? '#fff8e7';

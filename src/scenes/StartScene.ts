@@ -1,5 +1,4 @@
 import Phaser from 'phaser';
-import { drawSky } from '../render.js';
 import { soundSystem } from '../sound.js';
 import { isMobileDevice } from '../mobile.js';
 import { DEFAULT_WORM_NAMES } from '../constants.js';
@@ -73,9 +72,7 @@ export class StartScene extends Phaser.Scene {
     const centerX = this.scale.width / 2;
     const centerY = this.scale.height / 2;
 
-    const sky = this.add.graphics();
-    drawSky(sky, this.scale.width, this.scale.height);
-    sky.setAlpha(0.35);
+    this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(this.scale.width, this.scale.height).setAlpha(0.35);
 
     this.add
       .text(centerX, 55, 'WORMS', {
