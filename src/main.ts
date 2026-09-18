@@ -12,6 +12,7 @@ new Phaser.Game({
   height: mobileDevice ? window.innerHeight : 720,
   parent: 'game-container',
   backgroundColor: '#6ec3f4',
+  pixelArt: true,
   scale: {
     mode: mobileDevice ? Phaser.Scale.RESIZE : Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

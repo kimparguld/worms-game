@@ -3,6 +3,7 @@ import { drawSky } from '../render.js';
 import { soundSystem } from '../sound.js';
 import { isMobileDevice } from '../mobile.js';
 import { DEFAULT_WORM_NAMES } from '../constants.js';
+import { loadManifestAssets } from '../assetLoader.js';
 
 const CONTROLS = [
   'Arrow Left/Right or A/D - Move',
@@ -60,6 +61,10 @@ export class StartScene extends Phaser.Scene {
 
   constructor() {
     super('StartScene');
+  }
+
+  preload(): void {
+    loadManifestAssets(this);
   }
 
   create(): void {
