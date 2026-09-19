@@ -117,6 +117,33 @@
         color: #16213f;
         background: #ffd966;
       }
+      .music-controls {
+        position: absolute;
+        top: max(6px, env(safe-area-inset-top));
+        right: 8px;
+        z-index: 10;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        pointer-events: auto;
+      }
+      .music-controls button {
+        box-sizing: border-box;
+        min-height: 26px;
+        padding: 4px 8px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        color: #fff8e7;
+        background: rgba(15, 23, 46, 0.82);
+        font:
+          700 12px 'Baloo 2',
+          sans-serif;
+        touch-action: manipulation;
+      }
+      .music-controls button:disabled {
+        opacity: 0.4;
+        touch-action: none;
+      }
     </style>
   </head>
   <body>

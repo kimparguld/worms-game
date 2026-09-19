@@ -133,9 +133,9 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   holyHandGrenade: {
     key: 'holyHandGrenade',
-    maxDamage: 95,
-    blastRadius: 80,
-    craterRadius: 80,
+    maxDamage: 125,
+    blastRadius: 130,
+    craterRadius: 130,
     chargeable: true,
     minSpeed: 150,
     maxSpeed: 650,

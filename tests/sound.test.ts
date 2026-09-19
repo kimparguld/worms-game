@@ -37,7 +37,11 @@ function makeAudioContextMock(): { context: AudioContext; oscillatorCount: () =>
     },
     createGain: () =>
       ({
-        gain: { setValueAtTime: () => undefined, exponentialRampToValueAtTime: () => undefined },
+        gain: {
+          setValueAtTime: () => undefined,
+          exponentialRampToValueAtTime: () => undefined,
+          linearRampToValueAtTime: () => undefined,
+        },
         connect: () => undefined,
       }) as unknown as GainNode,
   } as unknown as AudioContext;
@@ -71,5 +75,51 @@ describe('SoundSystem', () => {
 
     expect(contextCreations).toBe(1);
     expect(mock.oscillatorCount()).toBe(2);
+  });
+});
+
+describe('SoundSystem background music', () => {
+  it('toggles muted state without requiring audio to be unlocked first', () => {
+    const mock = makeAudioContextMock();
+    const sound = new SoundSystem(() => mock.context);
+
+    expect(sound.isMuted()).toBe(false);
+
+    sound.toggleMute();
+    expect(sound.isMuted()).toBe(true);
+
+    sound.toggleMute();
+    expect(sound.isMuted()).toBe(false);
+  });
+
+  it('starts with playback stopped', () => {
+    const mock = makeAudioContextMock();
+    const sound = new SoundSystem(() => mock.context);
+
+    expect(sound.isPlaying()).toBe(false);
+  });
+
+  it('does nothing when asked for the next track and only one background track is configured', () => {
+    const mock = makeAudioContextMock();
+    const sound = new SoundSystem(() => mock.context);
+
+    sound.nextTrack();
+
+    expect(sound.isPlaying()).toBe(false);
+  });
+
+  it('notifies subscribers when mute is toggled', () => {
+    const mock = makeAudioContextMock();
+    const sound = new SoundSystem(() => mock.context);
+    let notifications = 0;
+    sound.onChange(() => {
+      notifications += 1;
+    });
+
+    sound.toggleMute();
+    expect(notifications).toBe(1);
+
+    sound.toggleMute();
+    expect(notifications).toBe(2);
   });
 });

@@ -8,6 +8,7 @@ import type { Rope } from '../src/types.js';
 function ceilingTerrain(width: number, height: number, ceilingY: number) {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
+  terrain.decorationMask.fill(0);
   for (let x = 0; x < width; x++) {
     for (let y = 0; y <= ceilingY; y++) terrain.mask[y * width + x] = 1;
   }
@@ -25,6 +26,7 @@ describe('fireRope', () => {
   it('fails to attach when nothing solid is in range', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     const result = fireRope(50, 50, -Math.PI / 2, terrain, 30);
     expect(result.attached).toBe(false);
   });
@@ -41,6 +43,7 @@ describe('updateRopeSwing', () => {
   it('leaves the worm in a valid position when a rope is attached at zero length', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     const worm = createWorm(50, 50, 'p1', 'Alice');
     const rope: Rope = { attached: true, anchorX: 50, anchorY: 50, length: 0 };
 
@@ -53,6 +56,7 @@ describe('updateRopeSwing', () => {
   it('keeps the worm at a fixed distance from the anchor while swinging', () => {
     const terrain = createTerrain(200, 200);
     terrain.mask.fill(0); // open air - nothing for the swing to collide with
+    terrain.decorationMask.fill(0);
     const worm = createWorm(50, 70, 'p1', 'A');
     const rope: Rope = { attached: true, anchorX: 50, anchorY: 20, length: 50 };
     worm.vx = 20;

@@ -110,6 +110,7 @@ describe('raycastHit', () => {
   it('hits terrain along the ray', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     for (let x = 0; x < 100; x++) terrain.mask[50 * 100 + x] = 1;
     const hit = raycastHit(terrain, [], 50, 0, Math.PI / 2, 200);
     expect(hit.type).toBe('terrain');
@@ -119,6 +120,7 @@ describe('raycastHit', () => {
   it('hits a worm before terrain if the worm is closer', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     const worm = createWorm(50, 20, 'p1', 'A');
     const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);
     expect(hit.type).toBe('worm');
@@ -128,6 +130,7 @@ describe('raycastHit', () => {
   it('excludes the shooter from its own raycast', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     const shooter = createWorm(50, 50, 'p1', 'Shooter');
     const hit = raycastHit(terrain, [shooter], 50, 50, 0, 200, shooter);
     expect(hit.type).toBe('none');
@@ -136,6 +139,7 @@ describe('raycastHit', () => {
   it('does not hit a worm that is already dying', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     const worm = createWorm(50, 20, 'p1', 'A');
     worm.dying = true;
     const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);

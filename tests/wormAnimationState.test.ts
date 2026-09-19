@@ -16,8 +16,19 @@ describe('wormAnimationState', () => {
     expect(wormAnimationState({ ...base, onGround: false, vy: -50 })).toBe('jump');
   });
 
-  it('is "fall" when airborne and moving downward (positive vy)', () => {
-    expect(wormAnimationState({ ...base, onGround: false, vy: 50 })).toBe('fall');
+  it('is "fall" when airborne and falling faster than a normal step-down', () => {
+    expect(wormAnimationState({ ...base, onGround: false, vy: 200 })).toBe('fall');
+  });
+
+  it('is "walk", not "fall", when a small terrain bump briefly clears onGround', () => {
+    // A worm crossing a rough/bumpy edge can have onGround flicker false for
+    // a frame or two before gravity settles it back down - that's normal
+    // ground-following, not a real fall, so it shouldn't flash the fall pose.
+    expect(wormAnimationState({ ...base, onGround: false, vy: 50, vx: 20 })).toBe('walk');
+  });
+
+  it('is "idle", not "fall", when stationary and a small terrain bump briefly clears onGround', () => {
+    expect(wormAnimationState({ ...base, onGround: false, vy: 50, vx: 0 })).toBe('idle');
   });
 
   it('is "walk" when grounded and moving faster than the threshold', () => {

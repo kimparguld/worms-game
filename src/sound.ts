@@ -1,4 +1,4 @@
-export type SoundEffect = 'fire' | 'shotgun' | 'explosion' | 'splash' | 'turn' | 'charge';
+export type SoundEffect = 'fire' | 'shotgun' | 'explosion' | 'splash' | 'turn' | 'charge' | 'heal';
 
 type AudioContextFactory = () => AudioContext;
 type EffectSettings = { startFrequency: number; endFrequency: number; duration: number; volume: number };
@@ -10,9 +10,13 @@ const EFFECT_SETTINGS: Record<SoundEffect, EffectSettings> = {
   splash: { startFrequency: 420, endFrequency: 90, duration: 0.3, volume: 0.14 },
   turn: { startFrequency: 440, endFrequency: 660, duration: 0.18, volume: 0.08 },
   charge: { startFrequency: 220, endFrequency: 440, duration: 0.28, volume: 0.07 },
+  heal: { startFrequency: 500, endFrequency: 900, duration: 0.22, volume: 0.1 },
 };
 
-const BACKGROUND_VIDEO_ID = 'ruuMCgS6VLk';
+// One entry today, but nextTrack() below already cycles through the whole
+// list - adding a second video ID is enough to make "next song" do
+// something.
+const BACKGROUND_VIDEO_IDS = ['ruuMCgS6VLk'];
 const BACKGROUND_VOLUME = 18;
 
 function randomBetween(minimum: number, maximum: number): number {
@@ -31,9 +35,67 @@ export class SoundSystem {
   private unlocked = false;
   private readonly createContext: AudioContextFactory;
   private backgroundFrame: HTMLIFrameElement | null = null;
+  private musicMuted = false;
+  private musicPlaying = false;
+  private videoIndex = 0;
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(createContext: AudioContextFactory = createAudioContext) {
     this.createContext = createContext;
+  }
+
+  isMuted(): boolean {
+    return this.musicMuted;
+  }
+
+  isPlaying(): boolean {
+    return this.musicPlaying;
+  }
+
+  hasMultipleTracks(): boolean {
+    return BACKGROUND_VIDEO_IDS.length > 1;
+  }
+
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  toggleMute(): void {
+    this.musicMuted = !this.musicMuted;
+    this.sendPlayerCommand(this.musicMuted ? 'mute' : 'unMute');
+    this.notifyChange();
+  }
+
+  togglePlay(): void {
+    if (!this.backgroundFrame) {
+      this.unlock();
+      this.startBackgroundMusic();
+      return;
+    }
+    if (this.musicPlaying) {
+      this.sendPlayerCommand('pauseVideo');
+      this.musicPlaying = false;
+    } else {
+      this.sendPlayerCommand('playVideo');
+      this.musicPlaying = true;
+    }
+    this.notifyChange();
+  }
+
+  // A no-op with today's single-video playlist - BACKGROUND_VIDEO_IDS.length
+  // is 1, so the index wraps straight back to itself.
+  nextTrack(): void {
+    if (!this.hasMultipleTracks()) return;
+    this.videoIndex = (this.videoIndex + 1) % BACKGROUND_VIDEO_IDS.length;
+    this.musicPlaying = true;
+    if (this.backgroundFrame) {
+      this.sendPlayerCommand('loadVideoById', [BACKGROUND_VIDEO_IDS[this.videoIndex]]);
+    } else {
+      this.unlock();
+      this.startBackgroundMusic();
+    }
+    this.notifyChange();
   }
 
   unlock(): void {
@@ -76,9 +138,12 @@ export class SoundSystem {
     }
   }
 
+  // Idempotent entry point used by scenes on first user interaction - safe
+  // to call repeatedly, only creates the player iframe once.
   startBackgroundMusic(): void {
     if (!this.unlocked || this.backgroundFrame) return;
     const frame = document.createElement('iframe');
+    const videoId = BACKGROUND_VIDEO_IDS[this.videoIndex];
     const parameters = new URLSearchParams({
       autoplay: '1',
       controls: '0',
@@ -87,11 +152,11 @@ export class SoundSystem {
       modestbranding: '1',
       mute: '1',
       origin: window.location.origin,
-      playlist: BACKGROUND_VIDEO_ID,
+      playlist: videoId,
       playsinline: '1',
       rel: '0',
     });
-    frame.src = `https://www.youtube.com/embed/${BACKGROUND_VIDEO_ID}?${parameters}`;
+    frame.src = `https://www.youtube.com/embed/${videoId}?${parameters}`;
     frame.title = 'Background music';
     frame.allow = 'autoplay';
     frame.setAttribute('aria-hidden', 'true');
@@ -101,9 +166,11 @@ export class SoundSystem {
     frame.style.opacity = '0';
     frame.style.pointerEvents = 'none';
     frame.addEventListener('load', () => {
-      this.sendPlayerCommand('unMute');
+      this.sendPlayerCommand(this.musicMuted ? 'mute' : 'unMute');
       this.sendPlayerCommand('setVolume', [BACKGROUND_VOLUME]);
       this.sendPlayerCommand('playVideo');
+      this.musicPlaying = true;
+      this.notifyChange();
     });
     document.body.appendChild(frame);
     this.backgroundFrame = frame;
@@ -111,12 +178,19 @@ export class SoundSystem {
 
   private sendPlayerCommand(functionName: string, args: unknown[] = []): void {
     if (!this.backgroundFrame?.contentWindow) return;
-    this.backgroundFrame.contentWindow.postMessage(JSON.stringify({
-      event: 'command',
-      func: functionName,
-      args,
-      id: 'worms-background-player',
-    }), 'https://www.youtube.com');
+    this.backgroundFrame.contentWindow.postMessage(
+      JSON.stringify({
+        event: 'command',
+        func: functionName,
+        args,
+        id: 'worms-background-player',
+      }),
+      'https://www.youtube.com',
+    );
+  }
+
+  private notifyChange(): void {
+    this.changeListeners.forEach((listener) => listener());
   }
 
   private playTone(settings: EffectSettings, oscillatorType: OscillatorType): void {

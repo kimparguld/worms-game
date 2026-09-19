@@ -3,6 +3,7 @@ import { StartScene } from './scenes/StartScene.js';
 import { GameScene } from './scenes/GameScene.js';
 import { EndScene } from './scenes/EndScene.js';
 import { isMobileDevice } from './mobile.js';
+import { createMusicControls } from './musicControls.js';
 
 const mobileDevice = isMobileDevice();
 
@@ -20,3 +21,7 @@ new Phaser.Game({
   },
   scene: [StartScene, GameScene, EndScene],
 });
+
+// Created once, outside the Phaser scene graph, so it survives every scene
+// transition the same way the background music itself already does.
+createMusicControls();

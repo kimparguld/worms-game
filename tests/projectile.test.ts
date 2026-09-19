@@ -7,6 +7,7 @@ import type { Terrain, ProjectileUpdateResult } from '../src/types.js';
 function flatTerrain(width: number, height: number, groundY: number): Terrain {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
+  terrain.decorationMask.fill(0);
   for (let x = 0; x < width; x++) {
     for (let y = groundY; y < height; y++) terrain.mask[y * width + x] = 1;
   }

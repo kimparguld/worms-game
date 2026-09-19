@@ -23,6 +23,7 @@ import {
   DEFAULT_WORM_NAMES,
   DEATH_ANIM_DURATION_MS,
   SHOTGUN_TRACER_DURATION,
+  WORM_RENDER_SCALE,
 } from '../constants.js';
 import { soundSystem } from '../sound.js';
 import { aimWormAtPoint, isMobileDevice } from '../mobile.js';
@@ -31,9 +32,10 @@ import { TerrainRenderer } from '../render/TerrainRenderer.js';
 import { WaterRenderer } from '../render/WaterRenderer.js';
 import { WormRenderer } from '../render/WormRenderer.js';
 import { ProjectileRenderer } from '../render/ProjectileRenderer.js';
+import { CrateRenderer } from '../render/CrateRenderer.js';
 import { EffectsRenderer } from '../render/EffectsRenderer.js';
 import { HudRenderer } from '../render/HudRenderer.js';
-import { ASSET_MANIFEST, nineSliceInsets } from '../assetManifest.js';
+import { ASSET_MANIFEST } from '../assetManifest.js';
 
 interface GameSceneData {
   team1Name?: string;
@@ -58,6 +60,7 @@ export class GameScene extends Phaser.Scene {
   private waterRenderer!: WaterRenderer;
   private effectsRenderer!: EffectsRenderer;
   private projectileRenderer!: ProjectileRenderer;
+  private crateRenderer!: CrateRenderer;
   private wormRenderers = new Map<Worm, WormRenderer>();
   // The one deliberate remaining Graphics object: the rope line, the shotgun
   // tracer line and the aim/charge indicator line are all thin, arbitrary-
@@ -90,6 +93,7 @@ export class GameScene extends Phaser.Scene {
   private burstedProjectiles = new WeakSet<object>();
   private burstedShotgunTracers = new WeakSet<object>();
   private burstedGravestones = new WeakSet<object>();
+  private burstedCratePickups = new WeakSet<object>();
   private poofedWorms = new WeakSet<Worm>();
   private bannerWasVisible = false;
   private wasCharging = false;
@@ -187,7 +191,11 @@ export class GameScene extends Phaser.Scene {
 
     // Static sky/cloud backdrop, added once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.
-    const sky = this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT).setDepth(DEPTH_BACKDROP);
+    const sky = this.add
+      .image(0, 0, 'sky')
+      .setOrigin(0, 0)
+      .setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT)
+      .setDepth(DEPTH_BACKDROP);
     this.worldObjects.push(sky);
 
     // DEVIATION FROM BRIEF (ordering): the brief's Step 3 listed
@@ -209,18 +217,24 @@ export class GameScene extends Phaser.Scene {
     this.ropeGraphics = this.add.graphics();
     this.worldObjects.push(this.ropeGraphics);
     this.projectileRenderer = new ProjectileRenderer(this, this.worldObjects);
+    this.crateRenderer = new CrateRenderer(this, this.worldObjects);
 
     // The HUD panel sits top-centre, in the gap between the two team life
     // bars (which HudRenderer anchors to the left and right edges). Top-left
     // would sit directly on top of the first team's bar and hide it.
-    const hudPanelWidth = 220;
-    const hudPanelHeight = 74;
+    const hudPanelWidth = 320;
+    const hudPanelHeight = 94;
     const hudPanelX = Math.round(width / 2 - hudPanelWidth / 2);
     // Insets come from the manifest rather than being re-typed here, so
     // hud_panel's declared nine-slice and the one actually rendered can't drift.
-    const hudPanel = this.add
-      .nineslice(hudPanelX, 6, 'hud_panel', undefined, hudPanelWidth, hudPanelHeight, ...nineSliceInsets('hud_panel'))
-      .setOrigin(0, 0);
+
+    const hudPanel = this.add.graphics();
+
+    hudPanel.fillStyle(0x0f172e, 0.52);
+    hudPanel.fillRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 16);
+    hudPanel.lineStyle(2, 0xffffff, 0.12);
+    hudPanel.strokeRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 16);
+
     this.uiObjects.push(hudPanel);
     this.hudRenderer = new HudRenderer(this, this.uiObjects, width);
 
@@ -265,7 +279,7 @@ export class GameScene extends Phaser.Scene {
     // haven't acted yet", not the active worm generally.
     // Origin (0.5, 1): position sets the arrow's tip, so it's trivial to
     // pin just above a worm's head regardless of the texture's own height.
-    this.activeWormArrow = this.add.image(0, 0, 'turn_arrow').setOrigin(0.5, 1);
+    this.activeWormArrow = this.add.image(0, 0, 'turn_arrow').setOrigin(0.5, 1).setScale(WORM_RENDER_SCALE);
     this.worldObjects.push(this.activeWormArrow);
 
     // Added before the worm sprites below so it sits behind them, matching the
@@ -279,7 +293,7 @@ export class GameScene extends Phaser.Scene {
         const nameText = this.add
           .text(0, 0, worm.name, {
             fontFamily: "'Baloo 2', sans-serif",
-            fontSize: '11px',
+            fontSize: `${Math.round(11 * WORM_RENDER_SCALE)}px`,
             fontStyle: '700',
             color: teamColorCss(team.playerId),
             stroke: '#16213f',
@@ -344,7 +358,13 @@ export class GameScene extends Phaser.Scene {
       const staleKeys = this.textures
         .getTextureKeys()
         .filter((key) => /^terrainBuildingMask\d+$/.test(key))
-        .concat('terrainGroundMask', 'terrainEdgeMask');
+        .concat(
+          'terrainGroundMask',
+          'terrainEdgeMask',
+          'terrainGrassMask',
+          'terrainDecorationArt',
+          'terrainDecorationMask',
+        );
       for (const key of staleKeys) {
         if (this.textures.exists(key)) this.textures.remove(key);
       }
@@ -540,6 +560,12 @@ export class GameScene extends Phaser.Scene {
       this.burstedGravestones.add(stone);
       this.effectsRenderer.spawnGravestone(stone.x, stone.y);
     }
+    for (const pickup of this.rt.cratePickups) {
+      if (this.burstedCratePickups.has(pickup)) continue;
+      this.burstedCratePickups.add(pickup);
+      soundSystem.play('heal');
+      this.effectsRenderer.spawnPoof(pickup.x, pickup.y);
+    }
     // The poof fires at the exact moment WormRenderer stops drawing the death
     // wiggle and hides the sprite - the same DEATH_ANIM_DURATION_MS / 0.8
     // threshold it applies internally - so the sprite vanishing and the puff
@@ -649,6 +675,7 @@ export class GameScene extends Phaser.Scene {
       renderer.update(worm, isActive, isActive ? activeWeaponKey : undefined, this.rt.terrain, time);
     }
     this.projectileRenderer.update(this.rt.projectiles);
+    this.crateRenderer.update(this.rt.crates);
     this.updateRopeAndTracer(active);
     this.hudRenderer.update(this.rt.teams);
     updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
@@ -699,8 +726,8 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.activeWormArrow.setVisible(true);
-    const bounce = Math.sin(timeMs / 220) * 4;
-    this.activeWormArrow.setPosition(active.worm.x, active.worm.y - 46 + bounce);
+    const bounce = Math.sin(timeMs / 220) * 4 * WORM_RENDER_SCALE;
+    this.activeWormArrow.setPosition(active.worm.x, active.worm.y - 46 * WORM_RENDER_SCALE + bounce);
   }
 
   private updateWormNameTexts(): void {
@@ -710,7 +737,7 @@ export class GameScene extends Phaser.Scene {
         continue;
       }
       text.setVisible(true);
-      text.setPosition(worm.x, worm.y - 31);
+      text.setPosition(worm.x, worm.y - 31 * WORM_RENDER_SCALE);
     }
   }
 

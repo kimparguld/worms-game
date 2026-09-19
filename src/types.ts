@@ -1,13 +1,44 @@
+// A single static prop (rock/tree/bush/flower) scattered across the terrain
+// at generation time - see terrainDecorations.ts. Its own art/position for
+// rendering; its actual collision footprint lives in Terrain.decorationMask
+// (a layer separate from the natural ground, see that field's comment), not
+// here.
+export interface TerrainDecoration {
+  textureKey: string;
+  x: number;
+  y: number; // the ground surface row the decoration's bottom edge sits on
+  scale: number;
+  flipX: boolean;
+}
+
 export interface Terrain {
   width: number;
   height: number;
   mask: Uint8Array;
-  // Set whenever the mask is mutated (carveCircle); drawTerrain consumes it
-  // to skip its full per-pixel repaint on the vast majority of frames where
-  // the shape hasn't changed since the last draw. Optional so tests that
-  // build a Terrain literal without it still work - drawTerrain treats a
-  // missing flag as dirty.
+  // Rocks/trees/bushes/flowers' collision, kept as its own layer *above* the
+  // natural ground rather than merged into `mask` - see terrainDecorations.ts.
+  // A point is solid if either mask says so (see isSolid), so a decoration
+  // still climbs/digs exactly like terrain, but the ground's own silhouette
+  // never gets reshaped to fit one: an object always reads as something
+  // standing on the surface, not as a lump grown out of it. Same
+  // width*height layout as `mask`.
+  decorationMask: Uint8Array;
+  // Set whenever either mask is mutated (carveCircle); drawTerrain consumes
+  // it to skip its full per-pixel repaint on the vast majority of frames
+  // where the shape hasn't changed since the last draw. Optional so tests
+  // that build a Terrain literal without it still work - drawTerrain treats
+  // a missing flag as dirty.
   dirty?: boolean;
+  // Fractions (of width) of the columns this terrain's generation kept every
+  // cliff/building/lake/island clear of, for worm spawning - see
+  // terrain.ts's pickSpawnFractions. createMatchRuntime reads this instead
+  // of picking its own separate random columns, so the two always agree.
+  spawnFractions: number[];
+  // Which of the alternate ground fill textures (see assetManifest.ts) this
+  // match's terrain should render with - picked once per match so the
+  // dirt/soil look varies without changing mid-match.
+  groundTextureKey: string;
+  decorations: TerrainDecoration[];
 }
 
 export interface Worm {
@@ -145,6 +176,19 @@ export interface Splash {
   timer: number;
 }
 
+export interface Crate {
+  x: number;
+  y: number;
+  vy: number;
+  landed: boolean;
+}
+
+export interface CratePickup {
+  x: number;
+  y: number;
+  timer: number;
+}
+
 export interface ShotgunTracer {
   originX: number;
   originY: number;
@@ -176,4 +220,7 @@ export interface MatchRuntime {
   shotgunTracer: ShotgunTracer | null;
   explosions: Explosion[];
   splashes: Splash[];
+  crates: Crate[];
+  cratePickups: CratePickup[];
+  turnsSinceCrateEvent: number;
 }

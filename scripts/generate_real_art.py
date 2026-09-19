@@ -3,7 +3,7 @@
 manifest (src/assetManifest.ts) declares, overwriting the flat-color
 placeholders the placeholder generator wrote there.
 
-Two sources, per asset:
+Three sources, per asset:
 
 1. Real, CC0-licensed art from Kenney.nl (Particle Pack, Platformer Art
    Extended Tileset, Tanks, UI Pack, Game Icons - each pack's own bundled
@@ -11,11 +11,16 @@ Two sources, per asset:
    downloaded to KENNEY_SRC below and processed (cropped/resized/recolored)
    to the manifest's exact declared dimensions with Pillow.
 2. Procedural pixel art drawn with art_lib.py, for everything with no good
-   free match: the worm character (all animation states), all 10 weapons
-   (held + projectile - kept as one internally consistent hand-drawn set
-   rather than mixing in the one Kenney mine sprite that would otherwise
-   fit, since a single differently-styled weapon among nine drawn ones
-   would look worse than a consistent set), water, and the sky backdrop.
+   free match: terrain ground/grass, all 10 weapons (held + projectile -
+   kept as one internally consistent hand-drawn set rather than mixing in
+   the one Kenney mine sprite that would otherwise fit, since a single
+   differently-styled weapon among nine drawn ones would look worse than a
+   consistent set), water, and the sky backdrop.
+3. The worm character (all animation states): sliced and transformed from
+   a user-supplied sprite sheet (public/assets/worm/worms_sprites.jpg,
+   CC0-alike "Worms"-style pixel art) rather than drawn from scratch - see
+   gen_worm_idle/gen_worm_walk and friends below for exactly which source
+   frames become which state.
 
 Run from the repo root: python3 scripts/generate_real_art.py
 Requires Pillow (already installed locally); not part of the app's own
@@ -29,7 +34,7 @@ import os
 import random
 import sys
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.dirname(__file__))
 from art_lib import (
@@ -88,14 +93,23 @@ def boost_alpha(img, target_max=255):
     return Image.merge("RGBA", (r, g, b, a))
 
 
-def tile_to_size(tile, w, h, tile_size=64):
-    """Resize `tile` to tile_size x tile_size and repeat it to fill w x h."""
-    tile = tile.resize((tile_size, tile_size), Image.NEAREST)
-    result = Image.new("RGBA", (w, h))
-    for y in range(0, h, tile_size):
-        for x in range(0, w, tile_size):
-            result.paste(tile, (x, y))
-    return result
+def darken(hex_color, factor):
+    """Scale a 0xRRGGBB color's RGB channels toward black by `factor` (0-1)."""
+    r = int(((hex_color >> 16) & 0xFF) * factor)
+    g = int(((hex_color >> 8) & 0xFF) * factor)
+    b = int((hex_color & 0xFF) * factor)
+    return (r << 16) | (g << 8) | b
+
+
+def lighten(hex_color, factor):
+    """Scale a 0xRRGGBB color's RGB channels toward white by `factor` (0-1)."""
+    r = (hex_color >> 16) & 0xFF
+    g = (hex_color >> 8) & 0xFF
+    b = hex_color & 0xFF
+    r = min(255, int(r + (255 - r) * factor))
+    g = min(255, int(g + (255 - g) * factor))
+    b = min(255, int(b + (255 - b) * factor))
+    return (r << 16) | (g << 8) | b
 
 
 def recolor_flat(img, hex_color):
@@ -111,25 +125,254 @@ def recolor_flat(img, hex_color):
     return img
 
 
+TERRAIN_TILE_SIZE = 512
+
+# Cartoon pebble-dirt fill (see the reference screenshot this was matched
+# against): a solid brown base wall-to-wall covered in round pebbles across
+# five brown/tan shades, each with a darker rim stroke and a small offset
+# highlight for a glossy, hand-painted read - replacing the earlier
+# Kenney-tile mosaic, which read as a pixel-art platformer tile rather than
+# this rounded cartoon-terrain look.
+DIRT_BASE = 0x8B5E3C
+PEBBLE_COLORS = [0x6B4226, 0x9C6B3E, 0xA97C50, 0xC9A66B, 0x5C3A21, 0xB98354]
+
+
+def _wrapped_shifts(c, r, size):
+    """Which of {-size, 0, size} to also draw a shape at so it tiles
+    seamlessly - only the shifts that could still land inside the canvas
+    given this shape's centre `c` and radius/half-extent `r` are returned,
+    so an interior shape (the common case) draws exactly once."""
+    return (-size, 0, size) if c - r < 0 or c + r > size else (0,)
+
+
+def gen_pebble_dirt(seed=42):
+    size = TERRAIN_TILE_SIZE
+    img = Image.new("RGBA", (size, size), rgba(DIRT_BASE))
+    draw = ImageDraw.Draw(img)
+    rng = random.Random(seed)
+    highlights = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    hl_draw = ImageDraw.Draw(highlights)
+
+    for _ in range(1100):
+        cx, cy = rng.uniform(0, size), rng.uniform(0, size)
+        r = rng.uniform(4, 13)
+        color = rng.choice(PEBBLE_COLORS)
+        for dx in _wrapped_shifts(cx, r, size):
+            for dy in _wrapped_shifts(cy, r, size):
+                bbox = [cx + dx - r, cy + dy - r, cx + dx + r, cy + dy + r]
+                draw.ellipse(bbox, fill=rgba(color))
+                draw.ellipse(bbox, outline=rgba(darken(color, 0.55)), width=1)
+                hl_r = r * 0.4
+                hl_cx, hl_cy = cx + dx - r * 0.3, cy + dy - r * 0.3
+                hl_draw.ellipse(
+                    [hl_cx - hl_r, hl_cy - hl_r, hl_cx + hl_r, hl_cy + hl_r],
+                    fill=rgba(lighten(color, 0.5), 110),
+                )
+
+    img.alpha_composite(highlights)
+    return img.convert("RGB")
+
+
+# Grass-cap layer: TerrainRenderer masks this to only the band of ground
+# pixels still part of each column's original (undug) surface, so it reads
+# as the classic "grass on top, dirt underneath" strata instead of a
+# flat-colored trim - and never re-appears on a crater floor once dug away,
+# since that mask is computed once from the pre-dig terrain. Drawn as a
+# bright green fill flecked with small rotated blade shapes in two darker
+# shades (plus a few lighter ones) rather than a flat color, so the thin
+# revealed strip still reads as textured turf rather than a solid bar.
+GRASS_BASE = 0x5FBF3F
+BLADE_COLORS = [(0x3E8F27, 3), (0x2E6E1C, 1), (0x8FE362, 1)]  # (color, relative weight)
+
+
+def gen_grass_cap(seed=43):
+    size = TERRAIN_TILE_SIZE
+    img = Image.new("RGBA", (size, size), rgba(GRASS_BASE))
+    rng = random.Random(seed)
+    weighted_colors = [c for c, weight in BLADE_COLORS for _ in range(weight)]
+
+    for _ in range(900):
+        cx, cy = rng.uniform(0, size), rng.uniform(0, size)
+        length = rng.uniform(5, 11)
+        width_ = rng.uniform(2, 4)
+        angle = rng.uniform(-30, 30)
+        color = rng.choice(weighted_colors)
+
+        blade = Image.new("RGBA", (int(length * 2) + 2, int(width_ * 2) + 2), (0, 0, 0, 0))
+        ImageDraw.Draw(blade).ellipse([0, 0, blade.width - 1, blade.height - 1], fill=rgba(color, 220))
+        blade = blade.rotate(angle, expand=True, resample=Image.BICUBIC)
+
+        for dx in _wrapped_shifts(cx, blade.width, size):
+            for dy in _wrapped_shifts(cy, blade.height, size):
+                img.alpha_composite(blade, (int(cx + dx - blade.width / 2), int(cy + dy - blade.height / 2)))
+
+    return img.convert("RGB")
+
+
+# Building facades: TerrainRenderer tiles each of these from world (0,0) as a
+# TileSprite and masks it to a building's dug silhouette (see
+# src/render/TerrainRenderer.ts) - so a facade is never seen as a whole
+# illustration, only as an arbitrary crop wherever a building happens to sit
+# on screen. That ruled out a one-off illustrated feature (earlier drafts
+# had a single door baked into one corner, which only looked right if a
+# building's silhouette happened to line up with it). Instead each facade is
+# a uniform, seamlessly-repeating building material - coursed
+# brick/stone blocks or corrugated metal, in the same layered
+# flat-fill-plus-outline-plus-offset-highlight technique as
+# gen_pebble_dirt/gen_grass_cap - with a windows motif on a grid pitch that
+# divides the canvas evenly so the coursing and window rhythm stay
+# consistent across a tile seam.
+BUILDING_W, BUILDING_H = 256, 512
+
+
+def _draw_coursed_blocks(img, w, h, block_w, block_h, colors, seed, radius=0):
+    """Running-bond rows of rounded rects (bricks/stone blocks) over img's
+    existing mortar-colored fill, each with a darker outline and a lighter
+    offset highlight - leaves a 1px mortar gap between blocks."""
+    rng = random.Random(seed)
+    draw = ImageDraw.Draw(img)
+    highlights = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    hl_draw = ImageDraw.Draw(highlights)
+
+    rows = h // block_h + 2
+    cols = w // block_w + 2
+    for row in range(-1, rows):
+        y0, y1 = row * block_h, row * block_h + block_h
+        offset = block_w // 2 if row % 2 else 0
+        for col in range(-1, cols):
+            x0, x1 = col * block_w - offset, col * block_w - offset + block_w
+            color = rng.choice(colors)
+            bbox = [x0 + 1, y0 + 1, x1 - 1, y1 - 1]
+            if radius:
+                draw.rounded_rectangle(bbox, radius=radius, fill=rgba(color))
+                draw.rounded_rectangle(bbox, radius=radius, outline=rgba(darken(color, 0.55)), width=2)
+            else:
+                draw.rectangle(bbox, fill=rgba(color))
+                draw.rectangle(bbox, outline=rgba(darken(color, 0.55)), width=2)
+            hl_w = (x1 - x0) * 0.45
+            hl_draw.rectangle([x0 + 3, y0 + 3, x0 + 3 + hl_w, y1 - 3], fill=rgba(lighten(color, 0.45), 80))
+
+    img.alpha_composite(highlights)
+
+
+BRICK_MORTAR = 0x5A4A42
+BRICK_COLORS = [0xB33A2E, 0xC24A3A, 0x9C2E22, 0xD1573F, 0xA83527]
+BRICK_FRAME = 0x4A2E1A
+BRICK_PANE = 0x8FD6E8
+BRICK_MUNTIN = 0xE8DCC8
+
+
+def gen_brick_facade(seed=51):
+    w, h = BUILDING_W, BUILDING_H
+    img = Image.new("RGBA", (w, h), rgba(BRICK_MORTAR))
+    _draw_coursed_blocks(img, w, h, block_w=32, block_h=16, colors=BRICK_COLORS, seed=seed)
+
+    cell = 128
+    for cy in range(cell // 2, h, cell):
+        for cx in range(cell // 2, w, cell):
+            bw, bh = 62, 84
+            frame = [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]
+            draw_rounded_rect(img, frame, 4, rgba(BRICK_FRAME))
+            pane = [frame[0] + 6, frame[1] + 6, frame[2] - 6, frame[3] - 6]
+            draw_rect(img, pane, rgba(BRICK_PANE))
+            draw_rect(img, [pane[0], pane[1], pane[0] + (pane[2] - pane[0]) * 0.4, pane[3]], rgba(lighten(BRICK_PANE, 0.4), 140))
+            mid_x, mid_y = (pane[0] + pane[2]) / 2, (pane[1] + pane[3]) / 2
+            draw_line(img, [(mid_x, pane[1]), (mid_x, pane[3])], 2, rgba(BRICK_MUNTIN))
+            draw_line(img, [(pane[0], mid_y), (pane[2], mid_y)], 2, rgba(BRICK_MUNTIN))
+            draw_rect(img, [frame[0] - 8, frame[3], frame[2] + 8, frame[3] + 6], rgba(darken(BRICK_FRAME, 0.8)))
+
+    return img.convert("RGB")
+
+
+METAL_BASE = 0x8A9199
+METAL_LIGHT = 0x9FA7AF
+METAL_DARK = 0x6E747A
+METAL_SEAM = 0x4A4F54
+METAL_RIVET = 0x3A3E42
+METAL_FRAME = 0x1B1D1F
+METAL_PANE = 0x2E3A42
+
+
+def gen_metal_facade(seed=52):
+    w, h = BUILDING_W, BUILDING_H
+    img = Image.new("RGBA", (w, h), rgba(METAL_BASE))
+
+    ridge_w = 16
+    for i, x in enumerate(range(0, w, ridge_w)):
+        color = METAL_LIGHT if i % 2 == 0 else METAL_DARK
+        draw_rect(img, [x, 0, x + ridge_w - 2, h], rgba(color))
+
+    panel_h = 128
+    rng = random.Random(seed)
+    for y in range(0, h, panel_h):
+        draw_rect(img, [0, y, w, y + 4], rgba(METAL_SEAM))
+        for x in range(8, w, 24):
+            draw_circle(img, x + rng.uniform(-2, 2), y + 2, 2.5, rgba(METAL_RIVET))
+
+    cell = 85
+    for cy in range(cell // 2, h, cell):
+        for cx in range(cell // 2, w, cell):
+            bw, bh = 28, 28
+            frame = [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]
+            draw_rect(img, frame, rgba(METAL_FRAME))
+            pane = [frame[0] + 4, frame[1] + 4, frame[2] - 4, frame[3] - 4]
+            draw_rect(img, pane, rgba(METAL_PANE))
+            draw_line(img, [(pane[0], pane[1]), (pane[2], pane[1] + (pane[3] - pane[1]) * 0.5)], 2, rgba(lighten(METAL_PANE, 0.6), 160))
+            for corner in ((frame[0] + 3, frame[1] + 3), (frame[2] - 3, frame[1] + 3), (frame[0] + 3, frame[3] - 3), (frame[2] - 3, frame[3] - 3)):
+                draw_circle(img, corner[0], corner[1], 1.5, rgba(METAL_RIVET))
+
+    return img.convert("RGB")
+
+
+STONE_MORTAR = 0x9C8F7A
+STONE_COLORS = [0xD8C7A1, 0xC9B68C, 0xE0D2B0, 0xB8A67C, 0xCDBB94]
+STONE_FRAME = 0xEDE3C8
+STONE_PANE = 0x3A4A6B
+
+
+def _draw_arch(img, bbox, fill):
+    """Round-topped window silhouette: a semicircle (diameter = bbox width)
+    sitting on top of a rectangle, so the shape reads as an arched window
+    rather than draw_rounded_rect's pill (round top *and* bottom)."""
+    x0, y0, x1, y1 = bbox
+    bw = x1 - x0
+    draw_ellipse(img, [x0, y0, x1, y0 + bw], fill)
+    draw_rect(img, [x0, y0 + bw / 2, x1, y1], fill)
+
+
+def gen_stone_facade(seed=53):
+    w, h = BUILDING_W, BUILDING_H
+    img = Image.new("RGBA", (w, h), rgba(STONE_MORTAR))
+    _draw_coursed_blocks(img, w, h, block_w=64, block_h=32, colors=STONE_COLORS, seed=seed, radius=3)
+
+    cell = 128
+    for cy in range(cell // 2, h, cell):
+        for cx in range(cell // 2, w, cell):
+            bw, bh = 56, 90
+            frame = [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]
+            _draw_arch(img, frame, rgba(STONE_FRAME))
+            pane = [frame[0] + 7, frame[1] + 7, frame[2] - 7, frame[3] - 7]
+            _draw_arch(img, pane, rgba(STONE_PANE))
+            arch_w = pane[2] - pane[0]
+            draw_arc(img, [pane[0] + 3, pane[1] + 3, pane[2] - 3, pane[1] + arch_w - 3], 195, 345, 3, rgba(lighten(STONE_PANE, 0.5), 170))
+            mid_x = (pane[0] + pane[2]) / 2
+            spring_y = pane[1] + arch_w / 2
+            draw_line(img, [(mid_x, spring_y), (mid_x, pane[3] - 4)], 2, rgba(STONE_FRAME))
+            draw_line(img, [(pane[0] + 4, spring_y), (pane[2] - 4, spring_y)], 2, rgba(STONE_FRAME, 120))
+
+    return img.convert("RGB")
+
+
+def gen_buildings():
+    save(gen_brick_facade(), out("assets/terrain/building_1.png"))
+    save(gen_metal_facade(), out("assets/terrain/building_2.png"))
+    save(gen_stone_facade(), out("assets/terrain/building_3.png"))
+
+
 def gen_terrain():
-    # "HalfXMid" tiles are solid only in their top half (they're meant for
-    # stacking at a boundary row, not tiling as a fill) - confirmed by
-    # inspecting the alpha channel directly, which showed exactly the
-    # horizontal banding that using them here produced. "slice21_21.png" is
-    # confirmed fully opaque (>99.9% of pixels) in all four of these
-    # sub-packs, so it tiles as a genuine solid fill with no transparent
-    # bands.
-    ground = tile_to_size(load("platformer-tileset", "PNG Dirt", "slice21_21.png"), 512, 512)
-    save(ground, out("assets/terrain/ground.png"))
-
-    castle = tile_to_size(load("platformer-tileset", "PNG Castle", "slice21_21.png"), 256, 512)
-    save(castle, out("assets/terrain/building_1.png"))
-
-    metal = tile_to_size(load("platformer-tileset", "PNG Metal", "slice21_21.png"), 256, 512)
-    save(metal, out("assets/terrain/building_2.png"))
-
-    choco = tile_to_size(load("platformer-tileset", "PNG Choco", "slice21_21.png"), 256, 512)
-    save(choco, out("assets/terrain/building_3.png"))
+    save(gen_pebble_dirt(), out("assets/terrain/ground.png"))
+    save(gen_grass_cap(), out("assets/terrain/grass.png"))
+    gen_buildings()
 
 
 def gen_effects_from_real_art():
@@ -213,125 +456,153 @@ def gen_misc_and_hud_from_real_art():
 
 
 # ---------------------------------------------------------------------------
-# Procedural art: worm character
+# Worm character: sliced and transformed from a provided sprite sheet
 # ---------------------------------------------------------------------------
 
-BODY = 0xD99578
-BODY_SHADE = 0x8F4E3F
-BODY_HIGHLIGHT = 0xF7C7AD
-SOFT_LINE = 0x5F3835
+WORM_SHEET_PATH = os.path.join(PUBLIC, "assets", "worm", "worms_sprites.jpg")
+WORM_CANVAS_W, WORM_CANVAS_H = 48, 56
+# Every extracted/derived frame's source crop is pasted with its own top
+# edge (== the sprite's head-top, true for every box below) at this fixed
+# canvas row, so the head lands at roughly the same screen position - close
+# to canvas-centre, matching WormRenderer's setOrigin(0.5, 0.5) plus
+# worm.y's role as roughly head-height (see headY = worm.y in
+# WormRenderer.update) - across every animation state, idle through death.
+WORM_HEAD_TOP_Y = 4
 
-SEGMENTS = [(21, 0, 7.5), (14, 1, 6), (8, 2, 4.5)]  # (dx from head, wave-phase index, radius)
-HEAD_R = 9
+# Hand-picked bounding boxes (left, top, right, bottom) into
+# worms_sprites.jpg for the three-frame bob cycle and five-frame inchworm
+# crawl, found by overlaying a pixel grid on the sheet and reading off where
+# each sprite's ink starts/ends. Not a uniform grid - the source art itself
+# isn't laid out on one.
+#
+# The bob cycle reads as a walk (a settled side-to-side sway), so it backs
+# 'walk'; the crawl's big forward lunge reads as a leap, so it backs 'jump'.
+# 'idle' gets its own single frame (the bob cycle's rest pose) rather than
+# sharing either animated cycle, so each state has an exclusive source file.
+WORM_BOB_BOXES = [(0, 0, 33, 39), (33, 0, 65, 39), (65, 0, 96, 39)]
+WORM_STAND_BOX = WORM_BOB_BOXES[0]
+WORM_CRAWL_BOXES = [
+    (0, 43, 31, 79),
+    (32, 42, 60, 89),
+    (65, 42, 94, 94),
+    (96, 42, 124, 94),
+    (126, 42, 153, 94),
+]
 
 
-def draw_worm_body(canvas_w, canvas_h, head_x, head_y, wave_amp, wave_phase, tilt_deg, squash):
-    img = canvas(canvas_w, canvas_h)
-    cx, cy = canvas_w / 2, canvas_h / 2
-    angle = math.radians(tilt_deg)
-    cos_a, sin_a = math.cos(angle), math.sin(angle)
+def _remove_sprite_sheet_bg(img, threshold=222):
+    """The sheet is a JPEG with a plain white background (no alpha) - key
+    it out so the cropped worm sits on transparency. Flood-fills near-white
+    starting from the crop's own border rather than thresholding every
+    pixel globally: the worm's face is *also* drawn near-white (for the
+    eyes/muzzle detail), and a global threshold punched a transparent hole
+    through it since that white is indistinguishable from the sheet's
+    background by color alone - it's only distinguishable by being enclosed
+    by the black outline instead of touching the crop's edge."""
+    img = img.convert("RGBA")
+    w, h = img.size
+    px = img.load()
 
-    def place(dx, dy):
-        # rotate (dx, dy) around origin, apply squash on the rotated y axis, then offset to head position
-        rx = dx * cos_a - dy * sin_a
-        ry = (dx * sin_a + dy * cos_a) * squash
-        return head_x + rx, head_y + ry
+    def is_bgish(x, y):
+        r, g, b, _a = px[x, y]
+        return r > threshold and g > threshold and b > threshold
 
-    # Tail segments, back-to-front so each overlaps under the one ahead
-    for dx, phase_i, r in reversed(SEGMENTS):
-        wobble = math.sin(wave_phase + phase_i * 1.3) * wave_amp
-        sx, sy = place(-dx, 2 + wobble)
-        draw_circle(img, sx, sy + 1.5, r * 1.05, fade(rgba(0x000000), 0.18))
-        draw_circle(img, sx, sy, r, rgba(BODY))
-        draw_ellipse(img, (sx - r, sy, sx + r, sy + r * 0.7), fade(rgba(BODY_SHADE), 0.6))
-        draw_ellipse(img, (sx - r * 0.4, sy - r * 0.5, sx + r * 0.4, sy), fade(rgba(BODY_HIGHLIGHT), 0.35))
+    visited = [[False] * w for _ in range(h)]
+    stack = []
+    for x in range(w):
+        for y in (0, h - 1):
+            if is_bgish(x, y) and not visited[y][x]:
+                visited[y][x] = True
+                stack.append((x, y))
+    for y in range(h):
+        for x in (0, w - 1):
+            if is_bgish(x, y) and not visited[y][x]:
+                visited[y][x] = True
+                stack.append((x, y))
 
-    # Back arm nub
-    bx, by = place(-12, 3)
-    draw_circle(img, bx, by, 4, rgba(BODY))
-
-    # Head
-    hx, hy = place(0, 0)
-    draw_circle(img, hx + 1.4, hy + 1.6, HEAD_R * 1.03, fade(rgba(0x000000), 0.18))
-    draw_circle(img, hx, hy, HEAD_R, rgba(BODY))
-    draw_ellipse(img, (hx - HEAD_R, hy + 2, hx + HEAD_R, hy + HEAD_R), fade(rgba(BODY_SHADE), 0.55))
-    draw_ellipse(img, (hx - HEAD_R * 0.6, hy - HEAD_R * 0.7, hx - HEAD_R * 0.05, hy - HEAD_R * 0.1),
-                 fade(rgba(BODY_HIGHLIGHT), 0.5))
-
-    # Freckles (deterministic-looking scatter, seeded once at module import)
-    for fx, fy, fr in [(-3, -3, 1.2), (2, -4, 1.0), (4, 1, 1.1), (-5, 1, 0.9)]:
-        draw_circle(img, hx + fx, hy + fy, fr, fade(rgba(BODY_SHADE), 0.7))
-
-    # Eyes
-    ex = hx + 3
-    for off in (-3, 4):
-        draw_circle(img, ex + off, hy - 2, 3.4, rgba(0xFFFFFF))
-        draw_circle(img, ex + off + 1, hy - 2, 1.6, rgba(0x1C1C1C))
-
-    # Eyebrows
-    draw_line(img, [(ex - 6, hy - 6), (ex - 1, hy - 7.5)], 1.6, fade(rgba(SOFT_LINE), 0.8))
-    draw_line(img, [(ex + 2, hy - 7.5), (ex + 7, hy - 6)], 1.6, fade(rgba(SOFT_LINE), 0.8))
-
-    # Smile
-    draw_arc(img, (ex - 3, hy - 1, ex + 5, hy + 6), 20, 160, 1.6, fade(rgba(0x8A4A4A), 0.85))
-
-    # Front arm (drawn last so it sits over the head/body join)
-    hand_x, hand_y = place(11, 2)
-    draw_line(img, [(hx + 3, hy + 3), (hand_x, hand_y)], 5, rgba(BODY))
-    draw_circle(img, hand_x, hand_y, 3.6, rgba(BODY))
+    while stack:
+        cx, cy = stack.pop()
+        r, g, b, _a = px[cx, cy]
+        px[cx, cy] = (r, g, b, 0)
+        for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+            if 0 <= nx < w and 0 <= ny < h and not visited[ny][nx] and is_bgish(nx, ny):
+                visited[ny][nx] = True
+                stack.append((nx, ny))
 
     return img
 
 
+def _crop_worm_frame(sheet, box):
+    # The source sheet draws the worm facing left (face/eyes on the left,
+    # tail trailing right) - mirrored here so the unflipped baseline faces
+    # right, matching WormRenderer's convention (setFlipX only on
+    # facing === -1, so facing === 1/right must be the unflipped art).
+    frame = _remove_sprite_sheet_bg(sheet.crop(box))
+    return frame.transpose(Image.FLIP_LEFT_RIGHT)
+
+
+def _place_worm_frame(crop):
+    frame = Image.new("RGBA", (WORM_CANVAS_W, WORM_CANVAS_H), (0, 0, 0, 0))
+    x = (WORM_CANVAS_W - crop.width) // 2
+    frame.alpha_composite(crop, (x, WORM_HEAD_TOP_Y))
+    return frame
+
+
+def _transformed_worm_frame(crop, tilt_deg, squash):
+    """Derives a jump/fall/death pose from an idle/walk crop by squashing
+    (vertical resize) then rotating - the same tilt+squash trick the
+    earlier hand-drawn version of this file used to get a "leaping"/
+    "falling"/"tumbling" read from a single static body drawing, just
+    applied to a real sprite crop instead of a freshly-drawn one."""
+    if squash != 1.0:
+        crop = crop.resize((crop.width, max(1, round(crop.height * squash))), Image.LANCZOS)
+    rotated = crop.rotate(-tilt_deg, expand=True, resample=Image.BICUBIC)
+    frame = Image.new("RGBA", (WORM_CANVAS_W, WORM_CANVAS_H), (0, 0, 0, 0))
+    x = (WORM_CANVAS_W - rotated.width) // 2
+    y = WORM_HEAD_TOP_Y - (rotated.height - crop.height) // 2
+    frame.alpha_composite(rotated, (x, y))
+    return frame
+
+
+def _load_sprite_sheet():
+    return Image.open(WORM_SHEET_PATH).convert("RGB")
+
+
 def gen_worm_idle():
-    frames = []
-    for i in range(3):
-        phase = i * 1.3
-        img = draw_worm_body(48, 48, 26, 26, wave_amp=0.8, wave_phase=phase, tilt_deg=-6, squash=1.0)
-        frames.append(img)
-    save_frames_as_strip(frames, out("assets/worm/idle.png"))
+    sheet = _load_sprite_sheet()
+    frame = _place_worm_frame(_crop_worm_frame(sheet, WORM_STAND_BOX))
+    save_frames_as_strip([frame], out("assets/worm/idle.png"))
 
 
 def gen_worm_walk():
-    frames = []
-    for i in range(4):
-        phase = i * (math.pi / 2)
-        img = draw_worm_body(48, 48, 27, 25, wave_amp=3.2, wave_phase=phase, tilt_deg=-4, squash=1.0)
-        frames.append(img)
+    sheet = _load_sprite_sheet()
+    frames = [_place_worm_frame(_crop_worm_frame(sheet, box)) for box in WORM_BOB_BOXES]
     save_frames_as_strip(frames, out("assets/worm/walk.png"))
 
 
 def gen_worm_jump():
-    img = draw_worm_body(48, 48, 27, 22, wave_amp=0, wave_phase=0, tilt_deg=-24, squash=0.92)
-    save_frames_as_strip([img], out("assets/worm/jump.png"))
+    sheet = _load_sprite_sheet()
+    frames = [_place_worm_frame(_crop_worm_frame(sheet, box)) for box in WORM_CRAWL_BOXES]
+    save_frames_as_strip(frames, out("assets/worm/jump.png"))
 
 
 def gen_worm_fall():
-    img = draw_worm_body(48, 48, 27, 26, wave_amp=0, wave_phase=0, tilt_deg=14, squash=1.08)
-    save_frames_as_strip([img], out("assets/worm/fall.png"))
+    sheet = _load_sprite_sheet()
+    base = _crop_worm_frame(sheet, WORM_CRAWL_BOXES[2])
+    frame = _transformed_worm_frame(base, tilt_deg=14, squash=1.08)
+    save_frames_as_strip([frame], out("assets/worm/fall.png"))
 
 
 def gen_worm_death():
+    sheet = _load_sprite_sheet()
+    base = _crop_worm_frame(sheet, WORM_BOB_BOXES[0])
     frames = []
     for i in range(5):
         t = i / 4
-        tilt = t * 260
+        tilt = t * 250
         squash = 1 + math.sin(t * math.pi * 3) * 0.14
-        img = draw_worm_body(48, 48, 26, 26, wave_amp=1.5, wave_phase=t * 6, tilt_deg=tilt, squash=squash)
-        frames.append(img)
+        frames.append(_transformed_worm_frame(base, tilt_deg=tilt, squash=squash))
     save_frames_as_strip(frames, out("assets/worm/death.png"))
-
-
-def gen_worm_headband():
-    # A wide horizontal cloth band across the canvas (the head it wraps sits
-    # behind/under this in WormRenderer), with a small triangular tail
-    # flapping off one edge - tinted per-team at runtime via setTint, so
-    # this stays plain white/flat, no shading baked in.
-    img = canvas(16, 16)
-    draw_rounded_rect(img, (0, 5, 16, 11), 2.5, rgba(0xFFFFFF))
-    draw_polygon(img, [(0, 6), (-4, 3), (-4, 8), (0, 10)], rgba(0xFFFFFF))
-    draw_rounded_rect(img, (1, 6, 15, 7.5), 1, fade(rgba(0xFFFFFF), 0.45))
-    save(img, out("assets/worm/headband.png"))
 
 
 def gen_rope_hook():
@@ -345,7 +616,87 @@ def gen_rope_hook():
 
 
 # ---------------------------------------------------------------------------
-# Procedural art: weapons (all 10, one consistent hand-drawn set)
+# Weapons: six of the ten sliced from the provided sprite sheet, the rest
+# (ninjaRope, sniperRifle, airstrikeRocket's projectile, drill, shotgun's
+# projectile) stay procedural - the sheet has no grapple hook, scoped rifle,
+# spinning drill, or pellet-spray equivalent to crop instead.
+# ---------------------------------------------------------------------------
+
+# Bounding boxes (left, top, right, bottom) into worms_sprites.jpg's weapons
+# row, found the same way as the worm boxes above: overlay a pixel grid,
+# read off each icon's ink extent.
+GREEN_CANNON_BOX = (2, 104, 54, 131)  # bazooka_held
+BLUE_CANNON_BOX = (57, 104, 111, 131)  # airstrikeRocket_held
+DART_BOX = (133, 107, 145, 121)  # bazooka_projectile
+GREEN_GRENADE_BOX = (61, 132, 79, 153)
+GOLD_ORB_BOX = (120, 129, 140, 159)  # holyHandGrenade
+DYNAMITE_STICK_BOX = (145, 134, 153, 155)
+MINE_DOME_BOX = (183, 147, 194, 157)
+SHOTGUN_BOX = (5, 141, 55, 156)  # held only - no pellet-spray equivalent to crop for the projectile
+
+
+def _crop_weapon_icon(sheet, box, flip_x=False):
+    # Every gun icon in the sheet is drawn muzzle-left, grip-right - the
+    # opposite of this project's convention (muzzle points away from the
+    # worm's body, i.e. right, at facing === 1 / aimAngle 0 - see
+    # WormRenderer's fireAngle/setFlipY handling), so guns pass flip_x=True.
+    icon = _remove_sprite_sheet_bg(sheet.crop(box))
+    return icon.transpose(Image.FLIP_LEFT_RIGHT) if flip_x else icon
+
+
+def _place_weapon_icon(icon, canvas_w, canvas_h):
+    # Centers the icon in the target canvas, scaling down (never up - these
+    # crops are already close to their target sizes) to fit within it while
+    # preserving aspect ratio. WormRenderer rotates this whole texture by
+    # aimAngle around its centre (see setRotation in update()), so centring
+    # here is what makes that rotation pivot sit roughly mid-weapon, matching
+    # how the procedural weapons above already behave (their own hand/muzzle
+    # coordinates likewise straddle the canvas centre rather than pinning
+    # the grip to it).
+    scale = min(1.0, canvas_w / icon.width, canvas_h / icon.height)
+    if scale < 1.0:
+        icon = icon.resize((max(1, round(icon.width * scale)), max(1, round(icon.height * scale))), Image.LANCZOS)
+    frame = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    x = (canvas_w - icon.width) // 2
+    y = (canvas_h - icon.height) // 2
+    frame.alpha_composite(icon, (x, y))
+    return frame
+
+
+def gen_weapon_icons_from_sheet():
+    sheet = _load_sprite_sheet()
+
+    bazooka_held = _crop_weapon_icon(sheet, GREEN_CANNON_BOX, flip_x=True)
+    save(_place_weapon_icon(bazooka_held, 32, 32), out("assets/weapons/bazooka_held.png"))
+    bazooka_proj = _crop_weapon_icon(sheet, DART_BOX, flip_x=True)  # nose-left in the sheet, nose-right is this project's convention
+    save(_place_weapon_icon(bazooka_proj, 40, 16), out("assets/weapons/bazooka_projectile.png"))
+
+    airstrike_held = _crop_weapon_icon(sheet, BLUE_CANNON_BOX, flip_x=True)
+    save(_place_weapon_icon(airstrike_held, 32, 32), out("assets/weapons/airstrikeRocket_held.png"))
+
+    grenade_icon = _crop_weapon_icon(sheet, GREEN_GRENADE_BOX)
+    save(_place_weapon_icon(grenade_icon, 32, 32), out("assets/weapons/grenade_held.png"))
+    save(_place_weapon_icon(grenade_icon, 24, 24), out("assets/weapons/grenade_projectile.png"))
+
+    holy_icon = _crop_weapon_icon(sheet, GOLD_ORB_BOX)
+    save(_place_weapon_icon(holy_icon, 32, 32), out("assets/weapons/holyHandGrenade_held.png"))
+    save(_place_weapon_icon(holy_icon, 24, 24), out("assets/weapons/holyHandGrenade_projectile.png"))
+
+    dynamite_icon = _crop_weapon_icon(sheet, DYNAMITE_STICK_BOX)
+    save(_place_weapon_icon(dynamite_icon, 32, 32), out("assets/weapons/dynamite_held.png"))
+    save(_place_weapon_icon(dynamite_icon, 24, 24), out("assets/weapons/dynamite_projectile.png"))
+
+    mine_icon = _crop_weapon_icon(sheet, MINE_DOME_BOX)
+    save(_place_weapon_icon(mine_icon, 32, 32), out("assets/weapons/mine_held.png"))
+    save(_place_weapon_icon(mine_icon, 24, 24), out("assets/weapons/mine_projectile.png"))
+
+    shotgun_held = _crop_weapon_icon(sheet, SHOTGUN_BOX, flip_x=True)
+    save(_place_weapon_icon(shotgun_held, 32, 32), out("assets/weapons/shotgun_held.png"))
+
+
+# ---------------------------------------------------------------------------
+# Procedural art: remaining weapons (ninjaRope, sniperRifle, drill, and the
+# shotgun/airstrikeRocket projectiles the sheet has no equivalent for)
 # ---------------------------------------------------------------------------
 
 
@@ -357,56 +708,7 @@ def new_proj(w=24, h=24):
     return canvas(w, h)
 
 
-def gen_bazooka():
-    held = new_held()
-    hx, hy, ex, ey = 6, 22, 27, 10
-    draw_line(held, [(hx, hy), (ex, ey)], 8, rgba(0x565964))
-    draw_line(held, [(hx - 1, hy - 2), (ex - 1, ey - 2)], 2, fade(rgba(0xAEB5C2), 0.6))
-    draw_circle(held, ex, ey, 5.5, rgba(0x3A3A42))
-    draw_circle(held, ex - 2, ey + 1, 3, rgba(0xD6452F))
-    draw_rounded_rect(held, (hx - 4, hy - 3, hx + 4, hy + 5), 2, rgba(0x30323A))
-    save(held, out("assets/weapons/bazooka_held.png"))
-
-    proj = new_proj(40, 16)
-    cy = 8
-    draw_ellipse(proj, (2, cy - 5, 30, cy + 5), rgba(0x8A2F20))
-    draw_ellipse(proj, (4, cy - 3.5, 28, cy + 3.5), rgba(0xFF5722))
-    draw_polygon(proj, [(30, cy - 5), (30, cy + 5), (39, cy)], rgba(0xF2F5F7))
-    draw_polygon(proj, [(4, cy - 5), (-4, cy - 9), (6, cy - 3)], rgba(0x45505A))
-    draw_polygon(proj, [(4, cy + 5), (-4, cy + 9), (6, cy + 3)], rgba(0x45505A))
-    draw_ellipse(proj, (10, cy - 2, 20, cy), fade(rgba(0xFFFFFF), 0.4))
-    save(proj, out("assets/weapons/bazooka_projectile.png"))
-
-
-def gen_grenade():
-    def body(img, cx, cy, r):
-        draw_ellipse(img, (cx - r, cy + r * 0.3, cx + r, cy + r * 0.9), fade(rgba(0x203719), 0.25))
-        draw_circle(img, cx, cy, r, rgba(0x4F9A3A))
-        draw_line(img, [(cx - r * 0.7, cy), (cx + r * 0.7, cy)], 1, fade(rgba(0x2E4A1C), 0.6))
-        draw_line(img, [(cx, cy - r * 0.7), (cx, cy + r * 0.7)], 1, fade(rgba(0x2E4A1C), 0.6))
-        draw_circle(img, cx - r * 0.3, cy - r * 0.3, r * 0.3, fade(rgba(0xFFFFFF), 0.3))
-        draw_line(img, [(cx, cy - r), (cx, cy - r * 1.5)], 1.6, rgba(0x4A4A3A))
-        draw_circle(img, cx, cy - r * 1.5, r * 0.35, rgba(0xC9C9C9))
-
-    held = new_held()
-    body(held, 16, 18, 7)
-    save(held, out("assets/weapons/grenade_held.png"))
-
-    proj = new_proj()
-    body(proj, 12, 13, 5.5)
-    save(proj, out("assets/weapons/grenade_projectile.png"))
-
-
-def gen_shotgun():
-    held = new_held()
-    hx, hy = 6, 22
-    draw_rounded_rect(held, (hx - 4, hy - 4, hx + 5, hy + 5), 2, rgba(0x8A5A2E))
-    draw_rounded_rect(held, (hx + 2, hy - 6, hx + 24, hy - 1), 2, rgba(0xC5CCD5))
-    draw_rounded_rect(held, (hx + 2, hy + 1, hx + 24, hy + 6), 2, rgba(0xC5CCD5))
-    draw_circle(held, hx + 24, hy - 3.5, 2.2, rgba(0x353842))
-    draw_circle(held, hx + 24, hy + 3.5, 2.2, rgba(0x353842))
-    save(held, out("assets/weapons/shotgun_held.png"))
-
+def gen_shotgun_projectile():
     proj = new_proj()
     for i in range(6):
         angle = -0.35 + i * 0.14
@@ -433,23 +735,6 @@ def gen_ninja_rope():
     save(proj, out("assets/weapons/ninjaRope_projectile.png"))
 
 
-def gen_dynamite():
-    def sticks(img, cx, cy, h, blink=False):
-        for dx in (-3.5, 0, 3.5):
-            draw_rounded_rect(img, (cx + dx - 1.6, cy - h / 2, cx + dx + 1.6, cy + h / 2), 1.4, rgba(0xD7263D))
-        draw_line(img, [(cx - 5, cy - h * 0.3), (cx + 7, cy - h * 0.3)], 1.4, fade(rgba(0x8A1220), 0.8))
-        draw_line(img, [(cx, cy - h / 2), (cx + 3, cy - h / 2 - 4)], 1.4, rgba(0x8A5A2A))
-        draw_circle(img, cx + 3, cy - h / 2 - 4, 1.8, rgba(0xFFE58A if not blink else 0xFF2222))
-
-    held = new_held()
-    sticks(held, 16, 18, 13)
-    save(held, out("assets/weapons/dynamite_held.png"))
-
-    proj = new_proj()
-    sticks(proj, 12, 13, 11)
-    save(proj, out("assets/weapons/dynamite_projectile.png"))
-
-
 def gen_sniper_rifle():
     held = new_held()
     hx, hy, ex, ey = 6, 22, 27, 9
@@ -463,13 +748,7 @@ def gen_sniper_rifle():
     save(proj, out("assets/weapons/sniperRifle_projectile.png"))
 
 
-def gen_airstrike_rocket():
-    held = new_held()
-    hx, hy, ex, ey = 8, 22, 25, 12
-    draw_line(held, [(hx, hy), (ex, ey)], 5, rgba(0x4FC3F7))
-    draw_polygon(held, [(ex, ey), (ex - 6, ey - 4), (ex - 2, ey)], rgba(0x1C8FC7))
-    save(held, out("assets/weapons/airstrikeRocket_held.png"))
-
+def gen_airstrike_rocket_projectile():
     proj = new_proj(40, 16)
     cy = 8
     draw_ellipse(proj, (2, cy - 4, 28, cy + 4), rgba(0x1C8FC7))
@@ -478,41 +757,6 @@ def gen_airstrike_rocket():
     draw_polygon(proj, [(6, cy - 4), (-2, cy - 8), (8, cy - 2)], rgba(0x1C8FC7))
     draw_polygon(proj, [(6, cy + 4), (-2, cy + 8), (8, cy + 2)], rgba(0x1C8FC7))
     save(proj, out("assets/weapons/airstrikeRocket_projectile.png"))
-
-
-def gen_holy_hand_grenade():
-    def body(img, cx, cy, r):
-        draw_circle(img, cx, cy, r, rgba(0xFFD700))
-        draw_circle(img, cx - r * 0.3, cy - r * 0.3, r * 0.28, fade(rgba(0xFFF4C2), 0.5))
-        draw_line(img, [(cx, cy - r * 1.5), (cx, cy - r * 0.4)], 2, rgba(0xFFF4C2))
-        draw_line(img, [(cx - r * 0.4, cy - r * 1.0), (cx + r * 0.4, cy - r * 1.0)], 2, rgba(0xFFF4C2))
-
-    held = new_held()
-    body(held, 16, 18, 7)
-    save(held, out("assets/weapons/holyHandGrenade_held.png"))
-
-    proj = new_proj()
-    body(proj, 12, 13, 5.5)
-    save(proj, out("assets/weapons/holyHandGrenade_projectile.png"))
-
-
-def gen_mine():
-    def body(img, cx, cy, r):
-        draw_circle(img, cx, cy, r, rgba(0x37474F))
-        for angle_deg in (0, 60, 120, 180, 240, 300):
-            a = math.radians(angle_deg)
-            x1, y1 = cx + math.cos(a) * r, cy + math.sin(a) * r
-            x2, y2 = cx + math.cos(a) * (r + 3.5), cy + math.sin(a) * (r + 3.5)
-            draw_line(img, [(x1, y1), (x2, y2)], 1.6, rgba(0x1C262B))
-        draw_circle(img, cx - r * 0.25, cy - r * 0.25, r * 0.2, fade(rgba(0x7B8A91), 0.4))
-
-    held = new_held()
-    body(held, 16, 17, 6.5)
-    save(held, out("assets/weapons/mine_held.png"))
-
-    proj = new_proj()
-    body(proj, 12, 12, 5)
-    save(proj, out("assets/weapons/mine_projectile.png"))
 
 
 def gen_drill():
@@ -591,18 +835,13 @@ def main():
     gen_worm_jump()
     gen_worm_fall()
     gen_worm_death()
-    gen_worm_headband()
     gen_rope_hook()
 
-    gen_bazooka()
-    gen_grenade()
-    gen_shotgun()
+    gen_weapon_icons_from_sheet()
+    gen_shotgun_projectile()
     gen_ninja_rope()
-    gen_dynamite()
     gen_sniper_rifle()
-    gen_airstrike_rocket()
-    gen_holy_hand_grenade()
-    gen_mine()
+    gen_airstrike_rocket_projectile()
     gen_drill()
 
     gen_water()

@@ -14,6 +14,7 @@ import type { Terrain, WormInput } from '../src/types.js';
 function flatTerrain(width: number, height: number, groundY: number): Terrain {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
+  terrain.decorationMask.fill(0);
   for (let x = 0; x < width; x++) {
     for (let y = groundY; y < height; y++) terrain.mask[y * width + x] = 1;
   }
@@ -23,6 +24,7 @@ function flatTerrain(width: number, height: number, groundY: number): Terrain {
 function slopedTerrain(width: number, height: number, startGroundY: number, slopePerX: number): Terrain {
   const terrain = createTerrain(width, height);
   terrain.mask.fill(0);
+  terrain.decorationMask.fill(0);
   for (let x = 0; x < width; x++) {
     const groundY = Math.max(0, Math.min(height, Math.round(startGroundY - x * slopePerX)));
     for (let y = groundY; y < height; y++) terrain.mask[y * width + x] = 1;
@@ -174,6 +176,7 @@ describe('updateWormPhysics', () => {
   it('marks the worm dead when it falls below the world', () => {
     const terrain = createTerrain(100, 100);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     const worm = createWorm(50, 0, 'p1', 'A');
     const input: WormInput = { left: false, right: false, jump: false };
     for (let i = 0; i < 300; i++) updateWormPhysics(worm, terrain, input, 1 / 60);

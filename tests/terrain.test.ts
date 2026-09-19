@@ -139,16 +139,19 @@ describe('generateSilhouetteMask height budget', () => {
 });
 
 describe('generateSilhouetteMask spawn columns', () => {
-  // The four worm spawn X columns are fixed in matchLoop.ts's
-  // createMatchRuntime (150, 200, 760, 810 at the game's real 960x540
-  // resolution). Neither a cliff nor a building may ever land on or hug one
-  // of these columns: a building would put mask value 2 (not walkable
-  // ground) at the spawn point, and a cliff face landing there would wall a
-  // worm in on one side, or leave a bare pixel-thin ledge to spawn on.
+  // Spawn columns are randomized per match (see terrain.ts's
+  // pickSpawnFractions), but generateSilhouetteMask still accepts an
+  // explicit set so this can pin down a fixed set of columns and assert the
+  // exclusion guarantee holds for whatever columns it's given. Neither a
+  // cliff nor a building may ever land on or hug one of these columns: a
+  // building would put mask value 2 (not walkable ground) at the spawn
+  // point, and a cliff face landing there would wall a worm in on one side,
+  // or leave a bare pixel-thin ledge to spawn on.
   it('never puts a cliff face or a building at any of the four spawn X columns', () => {
     const width = 960,
       height = 540;
     const spawnColumns = [150, 200, 760, 810];
+    const spawnFractions = spawnColumns.map((x) => x / width);
     // Natural mountain terrain is smooth sine-wave silhouette: adjacent
     // columns shift by a couple of pixels at most. A cliff, by contrast, is
     // required elsewhere in this file to jump by at least 0.15 * height. Use
@@ -165,7 +168,7 @@ describe('generateSilhouetteMask spawn columns', () => {
     }
 
     for (let attempt = 0; attempt < 40; attempt++) {
-      const mask = generateSilhouetteMask(width, height);
+      const mask = generateSilhouetteMask(width, height, spawnFractions);
       for (const x of spawnColumns) {
         const here = surfaceHeightAndMask(mask, x);
         expect(here.maskValue).toBe(1); // never building material (2) at a spawn column
@@ -179,10 +182,48 @@ describe('generateSilhouetteMask spawn columns', () => {
   });
 });
 
+describe('createTerrain honors its own random spawn columns even under lake pressure', () => {
+  // Regression coverage for the two-tier fallback in
+  // sampleExcludingSpawnColumns: now that spawn columns are randomized
+  // across the whole map (see pickSpawnFractions) instead of two fixed
+  // pairs near the edges, their exclusion zones can combine with a lake's to
+  // leave no position that satisfies both. When that happens, the harder
+  // guarantee below (never on a spawn column) must still hold - it's the
+  // softer lake-depth guarantee (see the "building depth" describe block)
+  // that's allowed to give way instead.
+  it('never leaves a spawn column covered by a building or hugged by a cliff face, across many random layouts', () => {
+    const width = 300,
+      height = 200;
+    const maxNaturalSlope = height * 0.05;
+
+    function surfaceHeightAndMask(mask: Uint8Array, x: number): { height: number; maskValue: number } {
+      for (let y = 0; y < height; y++) {
+        const value = mask[y * width + x];
+        if (value !== 0) return { height: height - y, maskValue: value };
+      }
+      return { height: 0, maskValue: 0 };
+    }
+
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const terrain = createTerrain(width, height);
+      for (const fraction of terrain.spawnFractions) {
+        const x = Math.round(fraction * width);
+        const here = surfaceHeightAndMask(terrain.mask, x);
+        expect(here.maskValue).toBe(1);
+        const left = surfaceHeightAndMask(terrain.mask, Math.max(0, x - 1));
+        const right = surfaceHeightAndMask(terrain.mask, Math.min(width - 1, x + 1));
+        expect(Math.abs(here.height - left.height)).toBeLessThan(maxNaturalSlope);
+        expect(Math.abs(here.height - right.height)).toBeLessThan(maxNaturalSlope);
+      }
+    }
+  });
+});
+
 describe('isSolid', () => {
   it('returns true where the mask is non-zero (ground or building)', () => {
     const terrain = createTerrain(10, 10);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     terrain.mask[5 * 10 + 5] = 1;
     expect(isSolid(terrain, 5, 5)).toBe(true);
     expect(isSolid(terrain, 6, 5)).toBe(false);
@@ -191,6 +232,7 @@ describe('isSolid', () => {
   it('treats mask value 2 (building) as solid too', () => {
     const terrain = createTerrain(10, 10);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     terrain.mask[5 * 10 + 5] = 2;
     expect(isSolid(terrain, 5, 5)).toBe(true);
   });
@@ -209,6 +251,7 @@ describe('findSurfaceY', () => {
       groundY = 30;
     const terrain = createTerrain(width, height);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     for (let x = 0; x < width; x++) {
       for (let y = groundY; y < height; y++) terrain.mask[y * width + x] = 1;
     }
@@ -218,6 +261,7 @@ describe('findSurfaceY', () => {
   it('returns terrain.height when the column is never solid (e.g. a carved hole)', () => {
     const terrain = createTerrain(20, 20);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     expect(findSurfaceY(terrain, 10)).toBe(terrain.height);
   });
 
@@ -226,6 +270,7 @@ describe('findSurfaceY', () => {
       height = 40;
     const terrain = createTerrain(width, height);
     terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
     for (let x = 0; x < width; x++) {
       for (let y = 0; y < 5; y++) terrain.mask[y * width + x] = 1; // overhang/building roof, rows 0-4
       for (let y = 25; y < height; y++) terrain.mask[y * width + x] = 1; // tunnel floor, rows 25+
@@ -274,6 +319,52 @@ describe('generateSilhouetteMask always has two cliffs', () => {
   });
 });
 
+describe('generateSilhouetteMask building depth', () => {
+  // A building's facade is drawn down to its own column's natural
+  // (pre-building) ground height. That can legitimately go quite deep when a
+  // building straddles one of the map's cliffs - but never past the
+  // mountain's own worst-case natural trough (MOUNTAIN_BASE_FRACTION minus
+  // every octave's max amplitude in terrain.ts, ~0.15 of the height), since
+  // cliffs only ever raise ground, never lower it. A lake is the one thing
+  // that lowers ground further, down to ~0.05 near the water line - if a
+  // building's footprint ever overlapped one, its facade for that column
+  // would stretch almost down to the water line instead: a visible "spike"
+  // of building texture cutting deep into what should be plain dirt. This
+  // pins the boundary between those two cases (0.12, comfortably between the
+  // lake's ~0.05 and the mountain's ~0.15) to catch a regression in
+  // pickBuildingStartX's lake exclusion without flagging the legitimate
+  // cliff case.
+  // Pins an explicit, clustered-near-the-edges spawnFractions set (the same
+  // shape the old fixed SPAWN_EXCLUSION_FRACTIONS used) rather than relying
+  // on the default random pickSpawnFractions(): this test is specifically
+  // about pickBuildingStartX's lake exclusion, a separate concern from
+  // where spawn columns land (covered by the "spawn columns" describe block
+  // above). With spawn columns now randomized across the *whole* map, they
+  // can occasionally spread widely enough to combine with a lake's own
+  // exclusion zone and leave no position that satisfies both - when that
+  // happens, sampleExcludingSpawnColumns deliberately keeps the harder
+  // guarantee (never on a spawn column) and lets this softer one slip
+  // instead (see its own comment), which would make this assertion flaky
+  // under the default random spawn layout without saying anything new about
+  // lake exclusion itself.
+  it('never draws a building facade down into lake-depth territory', () => {
+    const width = 300,
+      height = 200;
+    const spawnFractions = [150, 200, 760, 810].map((x) => x / 960);
+    const deepestAllowedRow = height * (1 - 0.12);
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const mask = generateSilhouetteMask(width, height, spawnFractions);
+      for (let x = 0; x < width; x++) {
+        for (let y = 0; y < height; y++) {
+          if (mask[y * width + x] === 2) {
+            expect(y).toBeLessThan(deepestAllowedRow);
+          }
+        }
+      }
+    }
+  });
+});
+
 describe('generateSilhouetteMask has more buildings', () => {
   it('marks at least 3 separate building spans across a handful of attempts', () => {
     const width = 300,
@@ -297,6 +388,70 @@ describe('generateSilhouetteMask has more buildings', () => {
       if (spans >= 3) sawThreeOrMoreBuildings = true;
     }
     expect(sawThreeOrMoreBuildings).toBe(true);
+  });
+});
+
+describe('createTerrain spawn/decoration metadata', () => {
+  it('picks 4 spawn fractions spread across the map, clear of the edges', () => {
+    const terrain = createTerrain(960, 540);
+    expect(terrain.spawnFractions).toHaveLength(4);
+    for (const f of terrain.spawnFractions) {
+      expect(f).toBeGreaterThan(0.05);
+      expect(f).toBeLessThan(0.95);
+    }
+  });
+
+  it('varies the spawn fractions across matches (not a fixed layout)', () => {
+    const a = createTerrain(960, 540).spawnFractions;
+    const b = createTerrain(960, 540).spawnFractions;
+    expect(a).not.toEqual(b);
+  });
+
+  it('picks one of the three ground texture keys', () => {
+    const terrain = createTerrain(960, 540);
+    expect(['terrain_ground', 'terrain_ground_2', 'terrain_ground_3']).toContain(terrain.groundTextureKey);
+  });
+
+  it('scatters at least a few decorations, all within bounds and off building roofs', () => {
+    // Counts are deliberately light (halved from this feature's first pass -
+    // see terrainDecorations.ts's CATEGORIES) since each one is now a solid
+    // obstacle, not just cosmetic - so this only checks that scattering
+    // reliably places *something*, not a specific density.
+    const terrain = createTerrain(960, 540);
+    expect(terrain.decorations.length).toBeGreaterThan(0);
+    for (const d of terrain.decorations) {
+      expect(d.x).toBeGreaterThanOrEqual(0);
+      expect(d.x).toBeLessThanOrEqual(terrain.width);
+      expect(d.scale).toBeGreaterThan(0);
+      const column = Math.max(0, Math.min(terrain.width - 1, Math.round(d.x)));
+      expect(terrain.mask[d.y * terrain.width + column]).toBe(1);
+    }
+  });
+
+  it('stamps a decorationMask footprint above the surface under each decoration, so it is a real climbable/diggable obstacle - without touching the ground mask itself', () => {
+    const terrain = createTerrain(960, 540);
+    expect(terrain.decorations.length).toBeGreaterThan(0);
+    for (const d of terrain.decorations) {
+      const column = Math.max(0, Math.min(terrain.width - 1, Math.round(d.x)));
+      // The row immediately above the original ground surface should now be
+      // solid in decorationMask - stampFootprint always raises at least a
+      // little collision at a decoration's own anchor column (its
+      // footprint's tallest point) - but the ground's own mask is never
+      // touched by a decoration (see Terrain.decorationMask's comment).
+      expect(terrain.decorationMask[(d.y - 1) * terrain.width + column]).not.toBe(0);
+      expect(terrain.mask[(d.y - 1) * terrain.width + column]).toBe(0);
+      expect(isSolid(terrain, column, d.y - 1)).toBe(true);
+    }
+  });
+
+  it('keeps decorations clear of every spawn column', () => {
+    const terrain = createTerrain(960, 540);
+    const spawnColumnsPx = terrain.spawnFractions.map((f) => f * terrain.width);
+    for (const d of terrain.decorations) {
+      for (const spawnX of spawnColumnsPx) {
+        expect(Math.abs(d.x - spawnX)).toBeGreaterThan(40);
+      }
+    }
   });
 });
 

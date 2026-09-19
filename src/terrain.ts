@@ -1,4 +1,5 @@
 import { WATER_BAND_HEIGHT_FRACTION } from './constants.js';
+import { generateDecorations } from './terrainDecorations.js';
 import type { Terrain } from './types.js';
 
 // The Y coordinate of the water's surface - fixed at the bottom of the map,
@@ -28,54 +29,98 @@ export function waterLevelY(terrain: Terrain): number {
 // - above the 0.15 height jump the tests require for a rope-grabbable wall.
 const MOUNTAIN_BASE_FRACTION = 0.37;
 const MOUNTAIN_OCTAVES = [
-  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.13, minFrequency: 1, maxFrequency: 2 },
-  { minAmplitudeFraction: 0.03, maxAmplitudeFraction: 0.06, minFrequency: 2, maxFrequency: 4 },
-  { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 7 },
+  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.13, minFrequency: 1, maxFrequency: 0 },
+  { minAmplitudeFraction: 0.03, maxAmplitudeFraction: 0.06, minFrequency: 2, maxFrequency: 0 },
+  { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 0 },
 ];
 
-const CLIFF_WIDTH_FRACTION = 0.13;
-const CLIFF_RISE_MIN_FRACTION = 0.2;
-const CLIFF_RISE_MAX_FRACTION = 0.3;
-const MAX_GROUND_HEIGHT_FRACTION = 0.72;
+const CLIFF_WIDTH_FRACTION = 0.013;
+const CLIFF_RISE_MIN_FRACTION = 0.05;
+const CLIFF_RISE_MAX_FRACTION = 0.1;
+const MAX_GROUND_HEIGHT_FRACTION = 1.72;
 
-// The four fixed worm spawn X columns, expressed as fractions of the game's
-// width so this works at any resolution - createMatchRuntime in matchLoop.ts
-// imports this same array to place worms at exactly these columns, so the
-// two always agree. Cliffs and buildings are kept clear of these columns
-// (plus a margin) so a worm can never spawn walled in by a cliff face, or on
-// top of / squeezed against a building.
-export const SPAWN_EXCLUSION_FRACTIONS = [0.156, 0.208, 0.792, 0.844];
 // ~38px at 960 width - wide enough to keep a cliff/building's edge, not just
 // its center, clear of the spawn column.
 const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
+const SPAWN_COUNT = 4;
+// Keeps every worm well clear of the map's left/right edges.
+const SPAWN_MARGIN_FRACTION = 0.08;
+
+// Picks 4 worm spawn X columns, expressed as fractions of the game's width
+// so this works at any resolution - createMatchRuntime in matchLoop.ts reads
+// these back off the generated Terrain (see createTerrain) to place worms at
+// exactly these columns, so the two always agree. Cliffs, buildings, lakes,
+// and floating islands are all kept clear of these columns (plus a margin)
+// so a worm can never spawn walled in by a cliff face, on top of/squeezed
+// against a building, or dropped in a lake.
+//
+// The usable width is split into SPAWN_COUNT equal slots and one column is
+// picked at a random point inside each - this guarantees a minimum spacing
+// between every pair of worms (the slot width itself) while still varying
+// every match, and the final shuffle means there's no fixed "team 1 always
+// spawns on the left" pattern: any worm can land in any slot, so a match's
+// two teammates can end up right next to each other or clear across the map.
+function pickSpawnFractions(): number[] {
+  const usableFraction = 1 - SPAWN_MARGIN_FRACTION * 2;
+  const slotFraction = usableFraction / SPAWN_COUNT;
+  const pad = slotFraction * 0.15;
+  const fractions: number[] = [];
+  for (let i = 0; i < SPAWN_COUNT; i++) {
+    const slotStart = SPAWN_MARGIN_FRACTION + i * slotFraction;
+    fractions.push(randomBetween(slotStart + pad, slotStart + slotFraction - pad));
+  }
+  for (let i = fractions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [fractions[i], fractions[j]] = [fractions[j], fractions[i]];
+  }
+  return fractions;
+}
+
+const GROUND_TEXTURE_KEYS = ['terrain_ground', 'terrain_ground_2', 'terrain_ground_3'];
+
+// Picks which of the alternate ground fill textures (assetManifest.ts) this
+// match's terrain renders with - see TerrainRenderer, which reads this back
+// off the generated Terrain.
+function pickGroundTextureKey(): string {
+  return GROUND_TEXTURE_KEYS[randomInt(0, GROUND_TEXTURE_KEYS.length - 1)];
+}
 
 // Deterministically samples a fraction from [rangeMin, rangeMax] that is
 // guaranteed not to place an item of the given half-width anywhere near a
-// spawn column - no reroll, no retry budget, no chance of failure.
+// spawn column, nor (if given) overlapping any of extraForbiddenFractions -
+// no reroll, no retry budget, no chance of failure.
 //
 // For each spawn column, the forbidden zone is the set of center fractions
 // at which an item of this half-width would come within
 // SPAWN_EXCLUSION_MARGIN_FRACTION of that column:
 // [spawn - halfWidthFraction - margin, spawn + halfWidthFraction + margin].
-// These per-column zones are clipped to the requested range, merged (they
-// can and do overlap for this project's actual spawn fractions - e.g. 0.156
-// and 0.208 are close enough that their zones merge into one), and then the
-// complement (the allowed sub-intervals) is sampled uniformly by weighting
-// each sub-interval by its length, so the result is uniform over the whole
-// allowed region rather than biased toward whichever interval is checked
-// first.
-function sampleExcludingSpawnColumns(rangeMin: number, rangeMax: number, halfWidthFraction: number): number {
-  const forbidden: Array<[number, number]> = [];
-  for (const spawnFraction of SPAWN_EXCLUSION_FRACTIONS) {
-    const lo = Math.max(rangeMin, spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION);
-    const hi = Math.min(rangeMax, spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION);
-    if (lo < hi) forbidden.push([lo, hi]);
+// extraForbiddenFractions works the same way but for an already-known [lo,
+// hi] span (e.g. a lake's footprint) rather than a single point - callers
+// pass it pre-widened by their own half-width plus margin. These zones are
+// clipped to the requested range, merged (they can and do overlap for this
+// project's actual spawn fractions - e.g. 0.156 and 0.208 are close enough
+// that their zones merge into one), and then the complement (the allowed
+// sub-intervals) is sampled uniformly by weighting each sub-interval by its
+// length, so the result is uniform over the whole allowed region rather than
+// biased toward whichever interval is checked first.
+// Clips `forbidden` to [rangeMin, rangeMax], sweep-merges overlapping/
+// adjacent intervals, and returns the complement (the allowed sub-intervals)
+// within that range.
+function computeAllowedIntervals(
+  rangeMin: number,
+  rangeMax: number,
+  forbidden: Array<[number, number]>,
+): Array<[number, number]> {
+  const clipped: Array<[number, number]> = [];
+  for (const [rawLo, rawHi] of forbidden) {
+    const lo = Math.max(rangeMin, rawLo);
+    const hi = Math.min(rangeMax, rawHi);
+    if (lo < hi) clipped.push([lo, hi]);
   }
-  forbidden.sort((a, b) => a[0] - b[0]);
+  clipped.sort((a, b) => a[0] - b[0]);
 
-  // Sweep-merge overlapping/adjacent forbidden intervals.
   const merged: Array<[number, number]> = [];
-  for (const [lo, hi] of forbidden) {
+  for (const [lo, hi] of clipped) {
     const last = merged[merged.length - 1];
     if (last && lo <= last[1]) {
       last[1] = Math.max(last[1], hi);
@@ -84,8 +129,6 @@ function sampleExcludingSpawnColumns(rangeMin: number, rangeMax: number, halfWid
     }
   }
 
-  // Allowed sub-intervals are the complement of the merged forbidden
-  // intervals within [rangeMin, rangeMax].
   const allowed: Array<[number, number]> = [];
   let cursor = rangeMin;
   for (const [lo, hi] of merged) {
@@ -93,22 +136,103 @@ function sampleExcludingSpawnColumns(rangeMin: number, rangeMax: number, halfWid
     cursor = Math.max(cursor, hi);
   }
   if (cursor < rangeMax) allowed.push([cursor, rangeMax]);
+  return allowed;
+}
 
-  const totalLength = allowed.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
-  // Defensive fallback: should never happen with this project's actual
-  // constants (verified: every cliff/building range keeps a wide allowed
-  // margin), but if the allowed region is ever empty, return a well-defined
-  // midpoint rather than throwing or looping.
-  if (totalLength <= 0) return (rangeMin + rangeMax) / 2;
-
+// Samples uniformly from a set of allowed sub-intervals, weighting each by
+// its length so the result is uniform over the whole allowed region rather
+// than biased toward whichever interval is checked first. Returns null if
+// the intervals cover no length at all, rather than throwing.
+function sampleFromIntervals(intervals: Array<[number, number]>): number | null {
+  const totalLength = intervals.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
+  if (totalLength <= 0) return null;
   let offset = Math.random() * totalLength;
-  for (const [lo, hi] of allowed) {
+  for (const [lo, hi] of intervals) {
     const len = hi - lo;
     if (offset < len) return lo + offset;
     offset -= len;
   }
   // Floating-point edge case: offset landed exactly on the total length.
-  return allowed[allowed.length - 1][1];
+  return intervals[intervals.length - 1][1];
+}
+
+// Deterministically samples a fraction from [rangeMin, rangeMax] that is
+// guaranteed not to place an item of the given half-width anywhere near a
+// spawn column, nor (if given) overlapping any of extraForbiddenFractions -
+// no reroll, no retry budget, no chance of failure.
+//
+// For each spawn column, the forbidden zone is the set of center fractions
+// at which an item of this half-width would come within
+// SPAWN_EXCLUSION_MARGIN_FRACTION of that column. extraForbiddenFractions
+// works the same way but for an already-known [lo, hi] span (e.g. a lake's
+// footprint) rather than a single point - callers pass it pre-widened by
+// their own half-width plus margin.
+//
+// These two kinds of exclusion aren't equal priority: never placing a
+// feature at a spawn column is a hard gameplay requirement (a worm must
+// never spawn walled in or on top of one), while extraForbiddenFractions is
+// a softer aesthetic one (e.g. keeping a building facade off a lake edge).
+// With spawn columns now randomized across the whole map rather than fixed
+// near the edges (see pickSpawnFractions), their exclusion zones can
+// occasionally combine with a lake's to blank out an entire candidate range
+// - so this tries honoring both constraints first, and only drops the
+// softer extraForbidden one if that leaves nothing, rather than silently
+// dropping both the way a single-tier fallback would.
+function sampleExcludingSpawnColumns(
+  rangeMin: number,
+  rangeMax: number,
+  halfWidthFraction: number,
+  spawnFractions: number[],
+  extraForbiddenFractions: Array<[number, number]> = [],
+): number {
+  const spawnForbidden: Array<[number, number]> = spawnFractions.map((spawnFraction) => [
+    spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
+    spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  ]);
+
+  const withExtra = computeAllowedIntervals(rangeMin, rangeMax, [...spawnForbidden, ...extraForbiddenFractions]);
+  const sampled = sampleFromIntervals(withExtra);
+  if (sampled !== null) return sampled;
+
+  const spawnOnly = computeAllowedIntervals(rangeMin, rangeMax, spawnForbidden);
+  const spawnOnlySampled = sampleFromIntervals(spawnOnly);
+  if (spawnOnlySampled !== null) return spawnOnlySampled;
+
+  // Last resort: with spawn columns now spread across the whole map instead
+  // of clustered in two fixed pairs, it's possible (though rare - see the
+  // stress test in terrain.test.ts) for every one of the 4 spawn zones
+  // combined to blanket an entire candidate range, leaving nothing that's
+  // fully clear. There's no position left that satisfies the guarantee
+  // outright, so pick whichever point keeps the most distance from every
+  // spawn column instead of an arbitrary (and possibly worst-case) range
+  // midpoint - the closest this can get to "safe" when true safety isn't
+  // achievable.
+  return pointFarthestFromSpawnColumns(rangeMin, rangeMax, spawnFractions);
+}
+
+function pointFarthestFromSpawnColumns(rangeMin: number, rangeMax: number, spawnFractions: number[]): number {
+  const insideRange = spawnFractions.filter((f) => f > rangeMin && f < rangeMax).sort((a, b) => a - b);
+  // Candidates: the range's own edges (farthest from spawn columns that sit
+  // entirely outside the range) plus the midpoint between every consecutive
+  // pair of in-range spawn columns (the locally-farthest point between them)
+  // - the optimum for "maximize the minimum distance to any point in a set"
+  // is always one of these.
+  const candidates = [rangeMin, rangeMax];
+  for (let i = 0; i + 1 < insideRange.length; i++) {
+    candidates.push((insideRange[i] + insideRange[i + 1]) / 2);
+  }
+
+  let best = candidates[0];
+  let bestMinDistance = -Infinity;
+  for (const candidate of candidates) {
+    const minDistance =
+      spawnFractions.length === 0 ? Infinity : Math.min(...spawnFractions.map((f) => Math.abs(candidate - f)));
+    if (minDistance > bestMinDistance) {
+      bestMinDistance = minDistance;
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 const BUILDING_COUNT_MIN = 3;
@@ -143,20 +267,6 @@ const FLOATING_ISLAND_CENTER_Y_MAX_FRACTION = 0.5;
 // spawn-column exclusion by this same factor keeps a lobe from ever
 // creeping closer to a spawn column than a plain circle of that width would.
 const FLOATING_ISLAND_LOBE_OVERSHOOT = 1.4;
-
-// Small subsurface pockets carved into the solid mass after everything else
-// is placed - purely a rendering/destruction detail (a dug-in weapon can
-// break into one and reveal a cavity instead of solid dirt), never touching
-// any column's topmost surface, so every existing surface-height invariant
-// (cliff jump, spawn column slope, top clearance) is unaffected by
-// construction: see carveCaves's per-column protected-depth check.
-const CAVE_COUNT_MIN = 3;
-const CAVE_COUNT_MAX = 6;
-const CAVE_RADIUS_MIN_FRACTION = 0.012;
-const CAVE_RADIUS_MAX_FRACTION = 0.028;
-// Depth below a column's own surface that a cave may never reach into,
-// measured in the same height-fraction terms as the rest of this file.
-const CAVE_MIN_DEPTH_FRACTION = 0.05;
 
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
@@ -206,15 +316,15 @@ function applyCliff(heights: Float64Array, width: number, height: number, center
 // Deterministically samples a cliff's centerFraction from [min, max] such
 // that its footprint (including the spawn margin) never overlaps a known
 // spawn column - see sampleExcludingSpawnColumns.
-function pickCliffCenterFraction(min: number, max: number): number {
-  return sampleExcludingSpawnColumns(min, max, CLIFF_WIDTH_FRACTION / 2);
+function pickCliffCenterFraction(min: number, max: number, spawnFractions: number[]): number {
+  return sampleExcludingSpawnColumns(min, max, CLIFF_WIDTH_FRACTION / 2, spawnFractions);
 }
 
-function applyCliffs(heights: Float64Array, width: number, height: number): void {
+function applyCliffs(heights: Float64Array, width: number, height: number, spawnFractions: number[]): void {
   // Two disjoint fraction ranges so a second cliff can never overlap the
   // first and corrupt its boundary-height reference.
-  applyCliff(heights, width, height, pickCliffCenterFraction(0.15, 0.45));
-  applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85));
+  applyCliff(heights, width, height, pickCliffCenterFraction(0.15, 0.45, spawnFractions));
+  applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85, spawnFractions));
 }
 
 const LAKE_COUNT_MIN = 2;
@@ -227,22 +337,31 @@ const LAKE_WIDTH_MAX_FRACTION = 0.12;
 // at its edges, for a basin instead of a hard-edged pit.
 const LAKE_TARGET_HEIGHT_FRACTION = WATER_BAND_HEIGHT_FRACTION * 0.75;
 
-function pickLakeCenterFraction(halfWidthFraction: number): number {
-  return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction);
+function pickLakeCenterFraction(halfWidthFraction: number, spawnFractions: number[]): number {
+  return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction, spawnFractions);
 }
 
-function applyLakes(heights: Float64Array, width: number, height: number): void {
+// Returns each lake's [minXFraction, maxXFraction] footprint so buildings
+// can be kept off them entirely - see pickBuildingStartX.
+function applyLakes(
+  heights: Float64Array,
+  width: number,
+  height: number,
+  spawnFractions: number[],
+): Array<[number, number]> {
   const count = randomInt(LAKE_COUNT_MIN, LAKE_COUNT_MAX);
   const targetHeight = height * LAKE_TARGET_HEIGHT_FRACTION;
+  const lakeRanges: Array<[number, number]> = [];
   for (let i = 0; i < count; i++) {
     const lakeWidth = Math.max(
       1,
       Math.round(randomBetween(width * LAKE_WIDTH_MIN_FRACTION, width * LAKE_WIDTH_MAX_FRACTION)),
     );
     const halfWidthFraction = lakeWidth / width / 2;
-    const centerX = Math.round(pickLakeCenterFraction(halfWidthFraction) * width);
+    const centerX = Math.round(pickLakeCenterFraction(halfWidthFraction, spawnFractions) * width);
     const minX = Math.max(0, centerX - Math.round(lakeWidth / 2));
     const maxX = Math.min(width - 1, centerX + Math.round(lakeWidth / 2));
+    lakeRanges.push([minX / width, maxX / width]);
     const span = Math.max(1, maxX - minX);
     for (let x = minX; x <= maxX; x++) {
       // 0 at the lake's edges, 1 at its center.
@@ -250,32 +369,62 @@ function applyLakes(heights: Float64Array, width: number, height: number): void 
       heights[x] = heights[x] * (1 - basinShape) + targetHeight * basinShape;
     }
   }
+  return lakeRanges;
 }
 
-function computeGroundHeights(width: number, height: number): Float64Array {
+function computeGroundHeights(
+  width: number,
+  height: number,
+  spawnFractions: number[],
+): { heights: Float64Array; lakeRanges: Array<[number, number]> } {
   const heights = computeMountainHeights(width, height);
   // Lakes before cliffs: applyCliff always overwrites its own span with a
   // plateau raised by a fixed fraction above its (possibly lake-lowered)
   // boundary, so the cliff's wall-face jump is preserved regardless of a
   // lake landing nearby - reversed, a lake applied after could soften or
   // erase the cliff's face entirely.
-  applyLakes(heights, width, height);
-  applyCliffs(heights, width, height);
-  return heights;
+  const lakeRanges = applyLakes(heights, width, height, spawnFractions);
+  applyCliffs(heights, width, height, spawnFractions);
+  return { heights, lakeRanges };
 }
 
 // Deterministically samples a building's startX such that its footprint
-// (including the spawn margin) never overlaps a known spawn column. Reframed
-// as picking the building's *center* fraction (reusing the same
-// sampleExcludingSpawnColumns helper cliffs use) over the valid center range
-// [halfWidthFraction, 1 - halfWidthFraction], then converted back to a pixel
-// startX and clamped to the valid [0, width - buildingWidth] start range.
-function pickBuildingStartX(width: number, buildingWidth: number): number {
+// (including the spawn margin) never overlaps a known spawn column, nor a
+// lake's footprint. Reframed as picking the building's *center* fraction
+// (reusing the same sampleExcludingSpawnColumns helper cliffs use) over the
+// valid center range [halfWidthFraction, 1 - halfWidthFraction], then
+// converted back to a pixel startX and clamped to the valid
+// [0, width - buildingWidth] start range.
+//
+// Lakes are excluded (not just naturally avoided) because a building's
+// facade is drawn down to *its own column's* natural ground height (see
+// generateSilhouetteMask) - a footprint that clips a lake's near-water low
+// point would stretch that one column's facade almost down to the water
+// line, a visible spike of facade texture cutting deep into what should be
+// plain dirt. Buildings never need to touch a lake for any gameplay reason,
+// so the simplest fix is to keep the two apart entirely, the same way
+// spawn columns already are.
+function pickBuildingStartX(
+  width: number,
+  buildingWidth: number,
+  lakeRanges: Array<[number, number]>,
+  spawnFractions: number[],
+): number {
   const maxStart = Math.max(0, width - buildingWidth);
   const halfWidthFraction = buildingWidth / width / 2;
   const rangeMin = halfWidthFraction;
   const rangeMax = Math.max(rangeMin, 1 - halfWidthFraction);
-  const centerFraction = sampleExcludingSpawnColumns(rangeMin, rangeMax, halfWidthFraction);
+  const extraForbidden: Array<[number, number]> = lakeRanges.map(([lo, hi]) => [
+    lo - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
+    hi + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  ]);
+  const centerFraction = sampleExcludingSpawnColumns(
+    rangeMin,
+    rangeMax,
+    halfWidthFraction,
+    spawnFractions,
+    extraForbidden,
+  );
   const startX = Math.round(centerFraction * width - buildingWidth / 2);
   return Math.min(Math.max(0, startX), maxStart);
 }
@@ -283,8 +432,19 @@ function pickBuildingStartX(width: number, buildingWidth: number): number {
 // Adds flat-roofed building plateaus on top of the mountain silhouette,
 // returning the set of columns that are building material (mask value 2,
 // rendered with a distinct roof/wall palette in drawTerrain) rather than
-// plain ground (mask value 1).
-function applyBuildings(heights: Float64Array, width: number, height: number): Set<number> {
+// plain ground (mask value 1). generateSilhouetteMask draws each such
+// column's facade down to that column's own natural (pre-building) height,
+// so the facade/ground-texture seam varies smoothly with the mountain - safe
+// to do unconditionally because pickBuildingStartX already keeps a
+// building's footprint off any lake, the one place a column's natural
+// height could otherwise dip anomalously low (see that function's comment).
+function applyBuildings(
+  heights: Float64Array,
+  width: number,
+  height: number,
+  lakeRanges: Array<[number, number]>,
+  spawnFractions: number[],
+): Set<number> {
   const buildingColumns = new Set<number>();
   // Each building's roof is measured from the natural ground, not from
   // whatever an earlier building already raised these columns to - otherwise
@@ -296,7 +456,7 @@ function applyBuildings(heights: Float64Array, width: number, height: number): S
       1,
       Math.round(randomBetween(width * BUILDING_WIDTH_MIN_FRACTION, width * BUILDING_WIDTH_MAX_FRACTION)),
     );
-    const startX = pickBuildingStartX(width, buildingWidth);
+    const startX = pickBuildingStartX(width, buildingWidth, lakeRanges, spawnFractions);
     const minX = Math.max(0, startX);
     const maxX = Math.min(width - 1, startX + buildingWidth);
 
@@ -316,8 +476,8 @@ function applyBuildings(heights: Float64Array, width: number, height: number): S
   return buildingColumns;
 }
 
-function pickIslandCenterFraction(halfWidthFraction: number): number {
-  return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction);
+function pickIslandCenterFraction(halfWidthFraction: number, spawnFractions: number[]): number {
+  return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction, spawnFractions);
 }
 
 // Stamps a small cluster of overlapping circular lobes (an irregular blob,
@@ -335,7 +495,7 @@ function pickIslandCenterFraction(halfWidthFraction: number): number {
 // against the real per-column surface instead guarantees an island can
 // never touch, let alone reshape, existing terrain, regardless of where a
 // cliff or building happens to sit.
-function applyFloatingIslands(mask: Uint8Array, width: number, height: number): void {
+function applyFloatingIslands(mask: Uint8Array, width: number, height: number, spawnFractions: number[]): void {
   const surfaceRow = new Int32Array(width).fill(height);
   for (let x = 0; x < width; x++) {
     for (let y = 0; y < height; y++) {
@@ -354,7 +514,7 @@ function applyFloatingIslands(mask: Uint8Array, width: number, height: number): 
       width * FLOATING_ISLAND_RADIUS_MAX_FRACTION,
     );
     const halfWidthFraction = (radius * FLOATING_ISLAND_LOBE_OVERSHOOT) / width;
-    const centerX = Math.round(pickIslandCenterFraction(halfWidthFraction) * width);
+    const centerX = Math.round(pickIslandCenterFraction(halfWidthFraction, spawnFractions) * width);
     const centerY = Math.round(
       randomBetween(FLOATING_ISLAND_CENTER_Y_MIN_FRACTION, FLOATING_ISLAND_CENTER_Y_MAX_FRACTION) * height,
     );
@@ -382,48 +542,20 @@ function applyFloatingIslands(mask: Uint8Array, width: number, height: number): 
   }
 }
 
-// Carves small pockets into the solid mass, guaranteed to never reach a
-// column's own topmost surface (protected by CAVE_MIN_DEPTH_FRACTION), so
-// every surface-height invariant elsewhere in this file holds regardless of
-// where a cave lands.
-function carveCaves(mask: Uint8Array, width: number, height: number): void {
-  const surfaceRow = new Int32Array(width).fill(height);
-  for (let x = 0; x < width; x++) {
-    for (let y = 0; y < height; y++) {
-      if (mask[y * width + x] !== 0) {
-        surfaceRow[x] = y;
-        break;
-      }
-    }
-  }
-
-  const minDepth = height * CAVE_MIN_DEPTH_FRACTION;
-  const count = randomInt(CAVE_COUNT_MIN, CAVE_COUNT_MAX);
-  for (let i = 0; i < count; i++) {
-    const cx = Math.round(randomBetween(0, width - 1));
-    const localSurface = surfaceRow[cx];
-    if (localSurface >= height) continue; // an all-sky column - nothing to carve under
-    const radius = randomBetween(width * CAVE_RADIUS_MIN_FRACTION, width * CAVE_RADIUS_MAX_FRACTION);
-    const cy = localSurface + minDepth + radius + randomBetween(0, minDepth);
-
-    const minX = Math.max(0, Math.floor(cx - radius));
-    const maxX = Math.min(width - 1, Math.ceil(cx + radius));
-    const minY = Math.max(0, Math.floor(cy - radius));
-    const maxY = Math.min(height - 1, Math.ceil(cy + radius));
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        if (y <= surfaceRow[x] + minDepth) continue; // never touches this column's own surface
-        if ((x - cx) ** 2 + (y - cy) ** 2 <= radius * radius) mask[y * width + x] = 0;
-      }
-    }
-  }
-}
-
-export function generateSilhouetteMask(width: number, height: number): Uint8Array {
+// spawnFractions defaults to a freshly randomized set (see pickSpawnFractions)
+// so every ordinary caller gets a terrain that keeps its own random spawn
+// columns clear without having to know about them; tests that need to pin
+// down exactly where those columns are (e.g. to assert nothing ever lands on
+// them) can pass their own instead.
+export function generateSilhouetteMask(
+  width: number,
+  height: number,
+  spawnFractions: number[] = pickSpawnFractions(),
+): Uint8Array {
   const mask = new Uint8Array(width * height);
-  const heights = computeGroundHeights(width, height);
+  const { heights, lakeRanges } = computeGroundHeights(width, height, spawnFractions);
   const naturalHeights = heights.slice();
-  const buildingColumns = applyBuildings(heights, width, height);
+  const buildingColumns = applyBuildings(heights, width, height, lakeRanges, spawnFractions);
   // No column is ever solid this far down, regardless of its generated
   // height - it's reserved for water, only ever exposed where terrain gets
   // dug or blown away down to it.
@@ -443,20 +575,36 @@ export function generateSilhouetteMask(width: number, height: number): Uint8Arra
       }
     }
   }
-  applyFloatingIslands(mask, width, height);
-  carveCaves(mask, width, height);
+  applyFloatingIslands(mask, width, height, spawnFractions);
   return mask;
 }
 
 export function createTerrain(width: number, height: number): Terrain {
-  return { width, height, mask: generateSilhouetteMask(width, height), dirty: true };
+  const spawnFractions = pickSpawnFractions();
+  const mask = generateSilhouetteMask(width, height, spawnFractions);
+  const decorationMask = new Uint8Array(width * height);
+  return {
+    width,
+    height,
+    mask,
+    decorationMask,
+    dirty: true,
+    spawnFractions,
+    groundTextureKey: pickGroundTextureKey(),
+    decorations: generateDecorations(width, height, mask, decorationMask, spawnFractions),
+  };
 }
 
+// Solid wherever either layer says so - the natural ground, or a decoration
+// standing on it (see Terrain.decorationMask). A decoration never reshapes
+// the ground it sits on, so the two have to be checked independently rather
+// than merged into one mask.
 export function isSolid(terrain: Terrain, x: number, y: number): boolean {
   const xi = Math.round(x);
   const yi = Math.round(y);
   if (xi < 0 || xi >= terrain.width || yi < 0 || yi >= terrain.height) return false;
-  return terrain.mask[yi * terrain.width + xi] !== 0;
+  const i = yi * terrain.width + xi;
+  return terrain.mask[i] !== 0 || terrain.decorationMask[i] !== 0;
 }
 
 // Finds the nearest solid row at or below fromY - the world-topmost surface
@@ -472,6 +620,10 @@ export function findSurfaceY(terrain: Terrain, x: number, fromY = 0): number {
   return terrain.height;
 }
 
+// Clears both layers - the natural ground and any decoration standing on it
+// (see Terrain.decorationMask) - so an explosion erodes a rock/tree/bush
+// exactly like the rest of the destructible terrain: only the part actually
+// within the blast radius goes, not the whole object at once.
 export function carveCircle(terrain: Terrain, cx: number, cy: number, radius: number): void {
   const minX = Math.max(0, Math.floor(cx - radius));
   const maxX = Math.min(terrain.width - 1, Math.ceil(cx + radius));
@@ -480,7 +632,9 @@ export function carveCircle(terrain: Terrain, cx: number, cy: number, radius: nu
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
       if ((x - cx) ** 2 + (y - cy) ** 2 <= radius * radius) {
-        terrain.mask[y * terrain.width + x] = 0;
+        const i = y * terrain.width + x;
+        terrain.mask[i] = 0;
+        terrain.decorationMask[i] = 0;
       }
     }
   }

@@ -1,4 +1,4 @@
-import { findSurfaceY, createTerrain, waterLevelY, SPAWN_EXCLUSION_FRACTIONS, carveCircle } from './terrain.js';
+import { findSurfaceY, createTerrain, waterLevelY, carveCircle, isSolid } from './terrain.js';
 import {
   createWorm,
   updateWormPhysics,
@@ -20,8 +20,10 @@ import {
   DEFAULT_WORM_NAMES,
   DEATH_EXPLOSION_RADIUS,
   DEATH_EXPLOSION_DAMAGE,
+  GRAVITY,
+  STARTING_HP,
 } from './constants.js';
-import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2 } from './types.js';
+import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate } from './types.js';
 
 export const WEAPON_KEYS: WeaponKey[] = [
   'bazooka',
@@ -39,6 +41,15 @@ export const WEAPON_KEYS: WeaponKey[] = [
 const SPAWN_SURFACE_BUFFER = 20;
 const AIRSTRIKE_STRIKE_COUNT = 5;
 const AIRSTRIKE_EDGE_MARGIN = 40;
+// A health crate parachutes in every 4th turn (see spawnCrateIfDue), as long
+// as the previous one is still uncollected - turnsSinceCrateEvent keeps
+// climbing past the threshold in that case, so the next spawn simply waits
+// for the map to clear instead of ever stacking a second crate.
+const CRATE_SPAWN_INTERVAL_TURNS = 4;
+const CRATE_HEAL_AMOUNT = 25;
+const CRATE_PICKUP_RADIUS = 24; // px - distance from a worm's center that counts as reaching the crate
+const CRATE_EDGE_MARGIN = 60; // keep the spawn x away from the world's edges
+const CRATE_FALL_START_Y = -20; // spawns above the visible world and falls in, regardless of terrain height at that x
 
 export function createMatchRuntime(
   width: number,
@@ -49,9 +60,11 @@ export function createMatchRuntime(
 ): MatchRuntime {
   const terrain = createTerrain(width, height);
   const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
-  // Spawn columns scale with width via the same fractions terrain.ts keeps
-  // cliffs/buildings/lakes clear of - see SPAWN_EXCLUSION_FRACTIONS.
-  const [p1aX, p1bX, p2aX, p2bX] = SPAWN_EXCLUSION_FRACTIONS.map((f) => Math.round(f * width));
+  // Spawn columns are whatever random fractions this terrain's own
+  // generation picked and kept its cliffs/buildings/lakes/islands clear of -
+  // see terrain.ts's pickSpawnFractions - so worms and terrain always agree
+  // on where it's safe to land, even though it's a different set every match.
+  const [p1aX, p1bX, p2aX, p2bX] = terrain.spawnFractions.map((f) => Math.round(f * width));
   const teams: Team[] = [
     {
       playerId: 'p1',
@@ -78,6 +91,9 @@ export function createMatchRuntime(
     shotgunTracer: null,
     explosions: [],
     splashes: [],
+    crates: [],
+    cratePickups: [],
+    turnsSinceCrateEvent: 0,
   };
 }
 
@@ -132,6 +148,62 @@ function drillTerrain(rt: MatchRuntime, worm: Worm, angle: number, range: number
     timer: EXPLOSION_EFFECT_DURATION,
   });
   rt.retirementTimer = 1;
+}
+
+function spawnCrateIfDue(rt: MatchRuntime): void {
+  if (rt.crates.length > 0) return; // one on the map at a time - see CRATE_SPAWN_INTERVAL_TURNS comment
+  const margin = Math.min(CRATE_EDGE_MARGIN, rt.terrain.width / 4);
+  const x = margin + Math.random() * Math.max(1, rt.terrain.width - margin * 2);
+  rt.crates.push({ x, y: CRATE_FALL_START_Y, vy: 0, landed: false });
+  rt.turnsSinceCrateEvent = 0;
+}
+
+// Falls a still-airborne crate under gravity until it either lands on solid
+// terrain (same isSolid check worms/projectiles use) or crosses the water
+// line first, in which case it's lost - same as a worm dying in water, it
+// gets a splash and disappears rather than resting on the seabed.
+function updateCrates(rt: MatchRuntime, dt: number): void {
+  for (const crate of rt.crates) {
+    if (crate.landed) continue;
+    crate.vy += GRAVITY * dt;
+    crate.y += crate.vy * dt;
+    if (isSolid(rt.terrain, crate.x, crate.y)) {
+      crate.landed = true;
+      crate.vy = 0;
+    }
+  }
+  const surviving: Crate[] = [];
+  for (const crate of rt.crates) {
+    if (!crate.landed && crate.y >= waterLevelY(rt.terrain)) {
+      rt.splashes.push({ x: crate.x, y: waterLevelY(rt.terrain), timer: SPLASH_EFFECT_DURATION });
+      continue;
+    }
+    surviving.push(crate);
+  }
+  rt.crates = surviving;
+}
+
+// A landed crate heals whichever worm's center comes within pickup range -
+// checked against every worm (not just the active one) since that's cheap
+// and correct, matching how detonateAt/detonateDeath already scan allWorms.
+function collectCrates(rt: MatchRuntime): void {
+  const remaining: Crate[] = [];
+  for (const crate of rt.crates) {
+    if (!crate.landed) {
+      remaining.push(crate);
+      continue;
+    }
+    const collector = allWorms(rt).find(
+      (w) => w.alive && !w.dying && Math.hypot(w.x - crate.x, w.y - crate.y) < CRATE_PICKUP_RADIUS,
+    );
+    if (collector) {
+      collector.hp = Math.min(STARTING_HP, collector.hp + CRATE_HEAL_AMOUNT);
+      rt.cratePickups.push({ x: crate.x, y: crate.y, timer: SPLASH_EFFECT_DURATION });
+    } else {
+      remaining.push(crate);
+    }
+  }
+  rt.crates = remaining;
 }
 
 function rainAirstrike(rt: MatchRuntime, weaponKey: WeaponKey): void {
@@ -302,6 +374,11 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   for (const s of rt.splashes) s.timer -= dt;
   rt.splashes = rt.splashes.filter((s) => s.timer > 0);
 
+  updateCrates(rt, dt);
+  collectCrates(rt);
+  for (const pu of rt.cratePickups) pu.timer -= dt;
+  rt.cratePickups = rt.cratePickups.filter((pu) => pu.timer > 0);
+
   // Tracks whether the turn advanced through ANY of the three paths below,
   // captured explicitly (not inferred from currentIndex) so every path's
   // in-flight state - charge, rope, retirement - gets cleared uniformly,
@@ -345,5 +422,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     rt.rope = null;
     rt.turnBannerTimer = TURN_BANNER_DURATION_MS;
     rt.shotgunTracer = null;
+    rt.turnsSinceCrateEvent += 1;
+    if (rt.turnsSinceCrateEvent >= CRATE_SPAWN_INTERVAL_TURNS) spawnCrateIfDue(rt);
   }
 }

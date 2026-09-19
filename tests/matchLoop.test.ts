@@ -29,6 +29,7 @@ function makeInput(overrides: Partial<InputState> = {}): InputState {
 function makeRuntime(teams: Team[]): MatchRuntime {
   const terrain = createTerrain(200, 200);
   terrain.mask.fill(0);
+  terrain.decorationMask.fill(0);
   for (let x = 0; x < 200; x++) {
     for (let y = 150; y < 200; y++) terrain.mask[y * 200 + x] = 1;
   }
@@ -46,6 +47,9 @@ function makeRuntime(teams: Team[]): MatchRuntime {
     shotgunTracer: null,
     explosions: [],
     splashes: [],
+    crates: [],
+    cratePickups: [],
+    turnsSinceCrateEvent: 0,
   };
 }
 
@@ -765,5 +769,109 @@ describe('death explosion', () => {
 
     expect(rt.gravestones).toHaveLength(1);
     expect(farAway.hp).toBe(startHp);
+  });
+});
+
+// Advances one full turn and waits out the resulting turn-banner freeze, so
+// the next call isn't swallowed by it - mirrors how a real match alternates
+// turn-end and the frozen banner period in between.
+function endTurn(rt: MatchRuntime): void {
+  stepMatch(rt, makeInput({ endTurnRequested: true }), 1 / 60);
+  while (rt.turnBannerTimer !== null) {
+    stepMatch(rt, makeInput(), 1 / 60);
+  }
+}
+
+describe('health crates', () => {
+  // Matches CRATE_SPAWN_INTERVAL_TURNS in matchLoop.ts.
+  const SPAWN_INTERVAL_TURNS = 4;
+  const HEAL_AMOUNT = 25;
+
+  it('does not spawn a crate before the spawn interval is reached', () => {
+    const rt = makeRuntime(twoWormTeams());
+    for (let i = 0; i < SPAWN_INTERVAL_TURNS - 1; i++) endTurn(rt);
+    expect(rt.crates).toHaveLength(0);
+  });
+
+  it('spawns exactly one falling crate once the spawn interval is reached', () => {
+    const rt = makeRuntime(twoWormTeams());
+    for (let i = 0; i < SPAWN_INTERVAL_TURNS; i++) endTurn(rt);
+    expect(rt.crates).toHaveLength(1);
+    expect(rt.crates[0].landed).toBe(false);
+  });
+
+  it('does not spawn a second crate while one is still uncollected', () => {
+    const rt = makeRuntime(twoWormTeams());
+    for (let i = 0; i < SPAWN_INTERVAL_TURNS; i++) endTurn(rt);
+    expect(rt.crates).toHaveLength(1);
+    for (let i = 0; i < SPAWN_INTERVAL_TURNS; i++) endTurn(rt);
+    expect(rt.crates).toHaveLength(1);
+  });
+
+  it('falls under gravity and lands once it reaches solid terrain', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.crates = [{ x: 100, y: 0, vy: 0, landed: false }];
+    const input = makeInput();
+    for (let i = 0; i < 120; i++) {
+      stepMatch(rt, input, 1 / 60);
+      if (rt.crates[0]?.landed) break;
+    }
+    expect(rt.crates[0].landed).toBe(true);
+    expect(rt.crates[0].y).toBeGreaterThanOrEqual(150); // makeRuntime's solid ground starts at y=150
+    expect(rt.crates[0].y).toBeLessThan(170); // shouldn't overshoot far past the surface in one tick
+  });
+
+  it('despawns into the water if it falls before finding solid ground', () => {
+    const rt = makeRuntime(twoWormTeams());
+    // Carve a vertical gap under the crate's spawn column, clear down to the
+    // bottom, so it never finds solid ground and instead crosses the water
+    // line - the two worms (at x=50/x=150) keep their solid ground.
+    for (let x = 95; x <= 105; x++) {
+      for (let y = 0; y < 200; y++) rt.terrain.mask[y * 200 + x] = 0;
+    }
+    rt.crates = [{ x: 100, y: 0, vy: 0, landed: false }];
+    const input = makeInput();
+    for (let i = 0; i < 200; i++) {
+      stepMatch(rt, input, 1 / 60);
+      if (rt.crates.length === 0) break;
+    }
+    expect(rt.crates).toHaveLength(0);
+    expect(rt.splashes.some((s) => Math.abs(s.x - 100) < 1)).toBe(true);
+  });
+
+  it('heals the worm that reaches a landed crate, removes the crate, and records a pickup', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.teams[0].worms[0];
+    takeDamage(worm, 30);
+    rt.crates = [{ x: worm.x, y: worm.y, vy: 0, landed: true }];
+    stepMatch(rt, makeInput(), 1 / 60);
+    expect(worm.hp).toBe(STARTING_HP - 30 + HEAL_AMOUNT);
+    expect(rt.crates).toHaveLength(0);
+    expect(rt.cratePickups).toHaveLength(1);
+  });
+
+  it('caps healing at the starting HP rather than overhealing', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.teams[0].worms[0];
+    takeDamage(worm, 10);
+    rt.crates = [{ x: worm.x, y: worm.y, vy: 0, landed: true }];
+    stepMatch(rt, makeInput(), 1 / 60);
+    expect(worm.hp).toBe(STARTING_HP);
+  });
+
+  it('leaves a landed crate on the map until a worm actually reaches it', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.crates = [{ x: 100, y: 149, vy: 0, landed: true }]; // 50px from both worms, outside pickup range
+    stepMatch(rt, makeInput(), 1 / 60);
+    expect(rt.crates).toHaveLength(1);
+  });
+
+  it('does not let a dying worm collect a crate', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.teams[0].worms[0];
+    worm.dying = true;
+    rt.crates = [{ x: worm.x, y: worm.y, vy: 0, landed: true }];
+    stepMatch(rt, makeInput(), 1 / 60);
+    expect(rt.crates).toHaveLength(1);
   });
 });

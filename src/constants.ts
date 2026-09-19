@@ -24,8 +24,16 @@ export const EXPLOSION_EFFECT_DURATION = 0.5; // seconds the fireball/shockwave 
 // revealed where terrain has been dug or blown away down to it.
 export const WATER_BAND_HEIGHT_FRACTION = 0.07;
 export const SPLASH_EFFECT_DURATION = 0.6; // seconds the splash visual plays when a worm hits the water
-export const WORLD_WIDTH = 1600; // px - the playable world's width; larger than the 1280 viewport so the zoomed-out camera (see GameScene) reveals more terrain
-export const WORLD_HEIGHT = 900; // px - same 16:9 ratio as the viewport, so the zoomed-out camera fits the whole world with no scrolling needed
+export const WORLD_WIDTH = 2240; // px - the playable world's width; larger than the 1280 viewport so the zoomed-out camera (see GameScene) reveals more terrain
+export const WORLD_HEIGHT = 1260; // px - same 16:9 ratio as the viewport, so the zoomed-out camera fits the whole world with no scrolling needed
+// Worms are rendered at this multiple of their native sprite size to cancel
+// out the extra zoom-out the camera applies as the world above got bigger
+// (see GameScene's camera.setZoom) - 1600 is the world width the worm art
+// and camera framing were originally tuned at, so worms keep the same
+// on-screen size as before even though there's now more map around them.
+// Purely a render-time scale: worm/terrain collision is a single point
+// (see worm.ts's updateWormPhysics), so this has no gameplay effect.
+export const WORM_RENDER_SCALE = WORLD_WIDTH / 1600;
 // Fallback worm names (2 per team) when the start screen's name fields are
 // left blank - also doubles as that screen's field placeholders, so the
 // label shown while empty always matches the name a blank field produces.
