@@ -1,9 +1,20 @@
-// Shared by terrain.ts (cliffs/lakes/buildings/islands vs. spawn columns) and
-// terrainDecorations.ts (rocks/trees/bushes/flowers vs. spawn columns): both
-// need to place something at a random position while guaranteeing it avoids
-// a set of forbidden zones, without ever falling back to reroll-and-hope.
-// Unit-agnostic - callers pass fractions-of-width or raw pixels consistently
-// and get the same units back.
+// Shared by terrain.ts (branches/lakes/buildings/islands vs. spawn columns)
+// and terrainDecorations.ts (rocks/trees/bushes/flowers vs. spawn columns):
+// both need to place something at a random position while guaranteeing it
+// avoids a set of forbidden zones, without ever falling back to
+// reroll-and-hope. Unit-agnostic - callers pass fractions-of-width or raw
+// pixels consistently and get the same units back.
+
+// Never stamp solid ground above this fraction of the world's height - the
+// top-clearance budget every terrain feature and decoration respects (see
+// terrain.ts's height-budget comment), so nothing generation builds can ever
+// poke into the HUD's reserved space at the top of the screen. Shared here
+// (rather than duplicated as a local constant in both terrain.ts and
+// terrainDecorations.ts, which it used to be) so the two can't drift apart -
+// this module is the one place both already import from without creating a
+// circular dependency (terrain.ts imports generateDecorations from
+// terrainDecorations.ts, so the reverse import isn't an option).
+export const TOP_CLEARANCE_FRACTION = 0.19;
 
 // Clips `forbidden` to [rangeMin, rangeMax], sweep-merges overlapping/
 // adjacent intervals, and returns the complement (the allowed sub-intervals)

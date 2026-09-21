@@ -6,6 +6,7 @@ import {
   chargeBarColor,
   teamHealthFraction,
   weaponLabel,
+  weaponAmmoLabel,
   fuseBlinkFrequency,
   projectileBlinkOn,
   deathWiggleRotation,
@@ -99,6 +100,21 @@ describe('weaponLabel', () => {
 
   it('falls back to the default weapon for an out-of-range selection', () => {
     expect(weaponLabel(99)).toBe('Bazooka');
+  });
+});
+
+describe('weaponAmmoLabel', () => {
+  it('shows nothing for a weapon with no per-match limit', () => {
+    expect(weaponAmmoLabel(undefined)).toBe('');
+  });
+
+  it('shows the remaining count for a limited weapon with uses left', () => {
+    expect(weaponAmmoLabel(1)).toBe(' (1 left)');
+    expect(weaponAmmoLabel(2)).toBe(' (2 left)');
+  });
+
+  it('shows OUT once a limited weapon has no uses left', () => {
+    expect(weaponAmmoLabel(0)).toBe(' (OUT)');
   });
 });
 

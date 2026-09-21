@@ -1,5 +1,5 @@
 import { WORLD_WIDTH } from './constants.js';
-import { computeAllowedIntervals, sampleFromIntervals } from './intervalSampling.js';
+import { computeAllowedIntervals, sampleFromIntervals, TOP_CLEARANCE_FRACTION } from './intervalSampling.js';
 import type { TerrainDecoration } from './types.js';
 
 // Native pixel size of each cropped prop sprite (see public/assets/terrain/props
@@ -400,17 +400,15 @@ const MIN_GAP_PX = 12;
 // Sampling x straight from the spawn-excluded intervals (see allowedX below)
 // means every attempt at least starts clear of the one biggest rejection
 // reason; what's left to retry against - another decoration's MIN_GAP_PX,
-// a building/cliff/lake edge crossing the footprint (see
+// a building/branch/lake edge crossing the footprint (see
 // footprintSpanIsUniformGround) - rejects more often for later categories,
 // once earlier ones have filled up more of the map. Raised well past the
 // old value of 24 so those later categories (bushes, flowers) don't run out
 // of tries and quietly end up sparser than they were asked to be.
 const MAX_PLACEMENT_ATTEMPTS = 60;
-// Never stamp solid ground above this fraction of the world's height - the
-// same top-clearance budget every other terrain feature respects (see
-// terrain.ts's height-budget comment), so a tall tree landing on top of an
-// already-maxed-out cliff can't poke into the HUD's reserved space.
-const TOP_CLEARANCE_FRACTION = 0.19;
+// TOP_CLEARANCE_FRACTION (imported above) is the same top-clearance budget
+// every other terrain feature respects, so a tall tree landing on top of an
+// already-maxed-out branch can't poke into the HUD's reserved space.
 // A cropped sprite's own bounding-box edge is, by definition, wherever its
 // outermost opaque pixel is - not necessarily anywhere near 0 fraction (see
 // HEIGHT_PROFILES: rock/tree/bush edges often sit well above half height).
@@ -444,11 +442,12 @@ function surfaceAt(mask: Uint8Array, width: number, height: number, x: number): 
 }
 
 // A jump between adjacent columns' surface heights this large can only be a
-// cliff face or a building's edge (both guaranteed to jump by far more than
-// this - see terrain.ts's CLIFF_RISE/BUILDING_RISE fractions and the
-// "natural slope" comment in terrain.test.ts), never the mountain's own
-// smooth sine-wave silhouette, which shifts by at most a couple of px
-// between neighbors no matter how steep it looks zoomed out.
+// branch wall or a building's edge (both guaranteed to jump by far more than
+// this - see terrain.ts's BRANCH_HEIGHT_MIN/MAX_FRACTION and
+// BUILDING_RISE_MIN/MAX_FRACTION fractions and the "natural slope" comment
+// in terrain.test.ts), never the mountain's own smooth sine-wave silhouette,
+// which shifts by at most a couple of px between neighbors no matter how
+// steep it looks zoomed out.
 const MAX_NATURAL_ADJACENT_SLOPE_FRACTION = 0.05;
 
 // Runs of columns that can never host a decoration's *anchor* - a building
@@ -493,8 +492,9 @@ function computeBadGroundIntervals(
 // ground those two drift apart the further a column sits from the anchor,
 // so a decoration stood on a real slope has its canopy silently masked out
 // wherever the local ground has moved too far from the anchor's own height -
-// visually identical to the straddling-a-cliff-edge clip this same function
-// already rejects, just from smooth terrain instead of a sharp edge.
+// visually identical to the straddling-a-branch-or-building-edge clip this
+// same function already rejects, just from smooth terrain instead of a
+// sharp edge.
 // Expressed as a fraction of the decoration's own rendered height (not a
 // flat pixel budget) so a tall tree and a short flower get proportionally
 // the same tolerance for how far the ground can drift under them.
@@ -509,7 +509,7 @@ const MAX_SURFACE_RANGE_FRACTION_OF_HEIGHT = 0.15;
 // *own* surface Y. That combination silently assumes the whole footprint
 // sits on one contiguous, close-to-flat patch of ground: previously only
 // the anchor column itself was checked, so a decoration whose footprint
-// happened to straddle a building edge, a cliff face, a lake basin, or just
+// happened to straddle a building edge, a branch wall, a lake basin, or just
 // a steep natural slope got its collision (and therefore its visible,
 // mask-clipped art) stamped against each column's true - very different -
 // local surface, cutting most of the sprite away and leaving only a sliver
@@ -688,7 +688,7 @@ export function generateDecorations(
   // computeBadGroundIntervals) - between this and spawnForbidden, a sampled
   // x's *anchor* is already guaranteed plantable ground; only the gap check
   // (against other decorations) and the footprint-span check (against a
-  // building/cliff/lake edge just outside the anchor) can still reject it.
+  // building/branch/lake edge just outside the anchor) can still reject it.
   const badGround = computeBadGroundIntervals(mask, width, height, lowGroundY);
   const allowedX = computeAllowedIntervals(0, width, [...spawnForbidden, ...badGround]);
   const occupiedX: number[] = [];
@@ -718,7 +718,7 @@ export function generateDecorations(
         // Same widened bounds stampFootprint itself will stamp into (see
         // FOOTPRINT_EDGE_PADDING_FRACTION) - checked here, before
         // committing to this placement, so a footprint that would straddle
-        // a building/cliff/lake edge gets rejected and retried instead of
+        // a building/branch/lake edge gets rejected and retried instead of
         // silently rendering a clipped sprite.
         const paddedHalfWidth = footprintWidth / 2 / (1 - 2 * FOOTPRINT_EDGE_PADDING_FRACTION);
         const minX = Math.max(0, Math.floor(x - paddedHalfWidth));

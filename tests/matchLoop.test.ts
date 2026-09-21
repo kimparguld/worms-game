@@ -874,4 +874,165 @@ describe('health crates', () => {
     stepMatch(rt, makeInput(), 1 / 60);
     expect(rt.crates).toHaveLength(1);
   });
+
+  it('detonates a crate caught in a weapon explosion like a grenade, removing it from the map', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.crates = [{ x: 100, y: 149, vy: 0, landed: true }];
+    const airstrikeIndex = WEAPON_KEYS.indexOf('airstrikeRocket') + 1;
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5); // every bomb lands at x=100, on the crate
+    const input = makeInput({ firing: true, selectedWeapon: airstrikeIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    randomSpy.mockRestore();
+    expect(rt.crates).toHaveLength(0);
+    // 5 airstrike bombs plus the crate's own chained grenade-style blast.
+    expect(rt.explosions.length).toBeGreaterThan(5);
+  });
+
+  it('leaves a crate untouched when no explosion reaches it', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.crates = [{ x: 190, y: 149, vy: 0, landed: true }];
+    const airstrikeIndex = WEAPON_KEYS.indexOf('airstrikeRocket') + 1;
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0); // every bomb lands at x=40, far from the crate
+    const input = makeInput({ firing: true, selectedWeapon: airstrikeIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    randomSpy.mockRestore();
+    expect(rt.crates).toHaveLength(1);
+  });
+});
+
+describe('stepMatch weapon selection resets each turn', () => {
+  it('resets the selected weapon back to bazooka when the turn advances', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const input = makeInput({ endTurnRequested: true, selectedWeapon: 5 });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(input.selectedWeapon).toBe(1);
+  });
+
+  it('does not reset the selected weapon mid-turn', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const input = makeInput({ selectedWeapon: 5 });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(input.selectedWeapon).toBe(5);
+  });
+});
+
+describe('stepMatch limited-use weapons', () => {
+  it('fires a limited weapon and decrements the active team ammo', () => {
+    const teams = twoWormTeams();
+    teams[0].ammo = { airstrikeRocket: 1 };
+    const rt = makeRuntime(teams);
+    const airstrikeIndex = WEAPON_KEYS.indexOf('airstrikeRocket') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: airstrikeIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.teams[0].ammo!.airstrikeRocket).toBe(0);
+    expect(rt.explosions).toHaveLength(5);
+  });
+
+  it('blocks firing once a limited weapon reaches zero remaining uses for that team', () => {
+    const teams = twoWormTeams();
+    teams[0].ammo = { airstrikeRocket: 0 };
+    const rt = makeRuntime(teams);
+    const airstrikeIndex = WEAPON_KEYS.indexOf('airstrikeRocket') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: airstrikeIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.teams[0].ammo!.airstrikeRocket).toBe(0);
+    expect(rt.explosions).toHaveLength(0);
+  });
+
+  it('does not gate an unlimited weapon even with no ammo map set', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const input = makeInput({ firing: true, selectedWeapon: 5 }); // dynamite, no match limit
+
+    stepMatch(rt, input, 0.016);
+
+    expect(rt.projectiles).toHaveLength(1);
+  });
+
+  it("keeps each team's limited-weapon ammo independent", () => {
+    const teams = twoWormTeams();
+    teams[0].ammo = { airstrikeRocket: 1 };
+    teams[1].ammo = { airstrikeRocket: 1 };
+    const rt = makeRuntime(teams);
+    const airstrikeIndex = WEAPON_KEYS.indexOf('airstrikeRocket') + 1;
+    stepMatch(rt, makeInput({ firing: true, selectedWeapon: airstrikeIndex }), 0.016);
+
+    expect(rt.teams[0].ammo!.airstrikeRocket).toBe(0);
+    expect(rt.teams[1].ammo!.airstrikeRocket).toBe(1);
+  });
+});
+
+describe('createMatchRuntime limited-weapon ammo', () => {
+  it('seeds each team with independent starting ammo for airstrike and holy hand grenade', () => {
+    const rt = createMatchRuntime(960, 540);
+    expect(rt.teams[0].ammo?.airstrikeRocket).toBe(1);
+    expect(rt.teams[0].ammo?.holyHandGrenade).toBe(2);
+    expect(rt.teams[1].ammo?.airstrikeRocket).toBe(1);
+    expect(rt.teams[1].ammo?.holyHandGrenade).toBe(2);
+    rt.teams[0].ammo!.airstrikeRocket = 0;
+    expect(rt.teams[1].ammo?.airstrikeRocket).toBe(1);
+  });
+
+  it('leaves unlimited weapons out of the ammo map', () => {
+    const rt = createMatchRuntime(960, 540);
+    expect(rt.teams[0].ammo?.bazooka).toBeUndefined();
+  });
+});
+
+describe('stepMatch falling gravestones', () => {
+  it('lets a gravestone keep falling under gravity when the worm died high in the air', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.y = 20; // well above the solid ground starting at y=150
+    worm.hp = 0;
+    worm.dying = true;
+    worm.deathTimer = 10; // 10ms left
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.02); // finalizes the death this frame
+
+    expect(rt.gravestones).toHaveLength(1);
+    expect(rt.gravestones[0].landed).toBe(false);
+    const yAfterDeath = rt.gravestones[0].y;
+
+    for (let i = 0; i < 60; i++) {
+      stepMatch(rt, input, 1 / 60);
+      if (rt.gravestones[0].landed) break;
+    }
+
+    expect(rt.gravestones[0].landed).toBe(true);
+    expect(rt.gravestones[0].y).toBeGreaterThan(yAfterDeath);
+    expect(rt.gravestones[0].y).toBeGreaterThanOrEqual(150);
+  });
+
+  it('lands quickly, barely falling, when the worm died right at ground level', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.match.turnOrder[0].worm;
+    worm.hp = 0;
+    worm.dying = true;
+    worm.deathTimer = 10;
+    const input = makeInput();
+
+    stepMatch(rt, input, 0.02); // finalizes the death this frame
+    const deathY = rt.gravestones[0].y;
+
+    for (let i = 0; i < 10; i++) {
+      stepMatch(rt, input, 1 / 60);
+      if (rt.gravestones[0].landed) break;
+    }
+
+    expect(rt.gravestones[0].landed).toBe(true);
+    expect(rt.gravestones[0].y - deathY).toBeLessThan(5);
+  });
 });

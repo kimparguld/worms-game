@@ -89,14 +89,30 @@ export function weaponLabel(selectedWeapon: number): string {
   return WEAPON_LABELS[key];
 }
 
-export function updateHud(hudText: Phaser.GameObjects.Text, matchState: MatchState, selectedWeapon: number): void {
-  const key = WEAPON_KEYS[selectedWeapon - 1] ?? WEAPON_KEYS[0];
-  const actionHint = WEAPONS[key].airstrike ? '\nFire to call random rain' : '';
+// A weapon with no per-match limit (see WEAPON_MATCH_LIMITS) gets no
+// suffix at all; a limited one shows its remaining count, or OUT once spent.
+export function weaponAmmoLabel(remainingUses: number | undefined): string {
+  if (remainingUses === undefined) return '';
+  if (remainingUses <= 0) return ' (OUT)';
+  return ` (${remainingUses} left)`;
+}
+
+export function updateHud(hudText: Phaser.GameObjects.Text, matchState: MatchState): void {
   hudText.setText(
     `Wind: ${matchState.wind.toFixed(1)}\n` +
-      `Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s\n` +
-      `Weapon: ${selectedWeapon} - ${weaponLabel(selectedWeapon)}` +
-      actionHint,
+      `Time: ${Math.max(0, Math.ceil(matchState.turnTimeRemaining / 1000))}s`,
+  );
+}
+
+export function updateWeaponText(
+  weaponText: Phaser.GameObjects.Text,
+  selectedWeapon: number,
+  remainingUses: number | undefined,
+): void {
+  const key = WEAPON_KEYS[selectedWeapon - 1] ?? WEAPON_KEYS[0];
+  const actionHint = WEAPONS[key].airstrike ? '\nFire to call random rain' : '';
+  weaponText.setText(
+    `Weapon: ${selectedWeapon} - ${weaponLabel(selectedWeapon)}${weaponAmmoLabel(remainingUses)}` + actionHint,
   );
 }
 

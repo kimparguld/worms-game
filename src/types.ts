@@ -30,7 +30,7 @@ export interface Terrain {
   // a missing flag as dirty.
   dirty?: boolean;
   // Fractions (of width) of the columns this terrain's generation kept every
-  // cliff/building/lake/island clear of, for worm spawning - see
+  // branch/building/lake/island clear of, for worm spawning - see
   // terrain.ts's pickSpawnFractions. createMatchRuntime reads this instead
   // of picking its own separate random columns, so the two always agree.
   spawnFractions: number[];
@@ -67,6 +67,12 @@ export interface Team {
   playerId: string;
   name: string;
   worms: Worm[];
+  // Remaining uses this match for weapons with a per-match limit (see
+  // WEAPON_MATCH_LIMITS in weapons.ts) - keyed only for limited weapons, so
+  // an unlimited weapon simply has no entry here. Optional so hand-built
+  // Team literals in tests that don't care about ammo keep compiling; only
+  // createMatchRuntime seeds it for real play.
+  ammo?: Partial<Record<WeaponKey, number>>;
 }
 
 export interface TurnEntry {
@@ -161,6 +167,11 @@ export interface RaycastHit {
 export interface Gravestone {
   x: number;
   y: number;
+  vy: number;
+  // Falls under gravity (like a Crate) until it reaches solid ground or the
+  // water line, so a worm that dies mid-air doesn't leave its gravestone
+  // floating - see updateGravestones in matchLoop.ts.
+  landed: boolean;
 }
 
 export interface Explosion {

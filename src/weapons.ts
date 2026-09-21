@@ -1,6 +1,13 @@
 import { isSolid } from './terrain.js';
 import type { Terrain, WeaponDef, WeaponKey, Worm, RaycastHit, ProjectileIntegration, Vector2 } from './types.js';
 
+// Weapons with a cap on total uses per team per match - absent keys mean no
+// limit. Checked/decremented per-team in matchLoop.ts's stepMatch.
+export const WEAPON_MATCH_LIMITS: Partial<Record<WeaponKey, number>> = {
+  airstrikeRocket: 1,
+  holyHandGrenade: 2,
+};
+
 export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   bazooka: {
     key: 'bazooka',
@@ -27,10 +34,10 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     craterRadius: 45,
     chargeable: true,
     minSpeed: 150,
-    maxSpeed: 800,
+    maxSpeed: 900,
     gravity: true,
     windAffected: true,
-    fuseTime: 4.5,
+    fuseTime: 3.5,
     hitscan: false,
     pellets: 0,
     bounces: true,
@@ -41,8 +48,8 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   shotgun: {
     key: 'shotgun',
     maxDamage: 25,
-    blastRadius: 0,
-    craterRadius: 0,
+    blastRadius: 10,
+    craterRadius: 10,
     chargeable: false,
     minSpeed: 0,
     maxSpeed: 0,
@@ -74,7 +81,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     rope: true,
     airstrike: false,
     drill: false,
-    range: 300,
+    range: 400,
   },
   dynamite: {
     key: 'dynamite',
@@ -86,7 +93,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     maxSpeed: 0,
     gravity: true,
     windAffected: false,
-    fuseTime: 5,
+    fuseTime: 3,
     hitscan: false,
     pellets: 0,
     bounces: false,
@@ -97,8 +104,8 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   sniperRifle: {
     key: 'sniperRifle',
     maxDamage: 45,
-    blastRadius: 0,
-    craterRadius: 0,
+    blastRadius: 10,
+    craterRadius: 10,
     chargeable: false,
     minSpeed: 0,
     maxSpeed: 0,
@@ -116,8 +123,8 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   airstrikeRocket: {
     key: 'airstrikeRocket',
     maxDamage: 36,
-    blastRadius: 30,
-    craterRadius: 28,
+    blastRadius: 60,
+    craterRadius: 40,
     chargeable: false,
     minSpeed: 0,
     maxSpeed: 0,
@@ -143,7 +150,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     windAffected: true,
     fuseTime: 6,
     hitscan: false,
-    pellets: 0,
+    pellets: 4,
     bounces: true,
     rope: false,
     airstrike: false,

@@ -9,7 +9,7 @@ import {
 } from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js';
 import { createProjectile, updateProjectile } from './projectile.js';
-import { calcDamage, raycastHit, WEAPONS } from './weapons.js';
+import { calcDamage, raycastHit, WEAPONS, WEAPON_MATCH_LIMITS } from './weapons.js';
 import { fireRope, updateRopeSwing, adjustRopeLength } from './rope.js';
 import {
   TURN_BANNER_DURATION_MS,
@@ -23,7 +23,7 @@ import {
   GRAVITY,
   STARTING_HP,
 } from './constants.js';
-import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate } from './types.js';
+import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate, Explosion } from './types.js';
 
 export const WEAPON_KEYS: WeaponKey[] = [
   'bazooka',
@@ -61,7 +61,7 @@ export function createMatchRuntime(
   const terrain = createTerrain(width, height);
   const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
   // Spawn columns are whatever random fractions this terrain's own
-  // generation picked and kept its cliffs/buildings/lakes/islands clear of -
+  // generation picked and kept its branches/buildings/lakes/islands clear of -
   // see terrain.ts's pickSpawnFractions - so worms and terrain always agree
   // on where it's safe to land, even though it's a different set every match.
   const [p1aX, p1bX, p2aX, p2bX] = terrain.spawnFractions.map((f) => Math.round(f * width));
@@ -70,11 +70,13 @@ export function createMatchRuntime(
       playerId: 'p1',
       name: team1Name,
       worms: [createWorm(p1aX, spawnY(p1aX), 'p1', wormNames[0]), createWorm(p1bX, spawnY(p1bX), 'p1', wormNames[1])],
+      ammo: { ...WEAPON_MATCH_LIMITS },
     },
     {
       playerId: 'p2',
       name: team2Name,
       worms: [createWorm(p2aX, spawnY(p2aX), 'p2', wormNames[2]), createWorm(p2bX, spawnY(p2bX), 'p2', wormNames[3])],
+      ammo: { ...WEAPON_MATCH_LIMITS },
     },
   ];
   return {
@@ -206,6 +208,43 @@ function collectCrates(rt: MatchRuntime): void {
   rt.crates = remaining;
 }
 
+// Falls a not-yet-landed gravestone under gravity, same shape as
+// updateCrates, so a worm that dies mid-air doesn't leave its headstone
+// floating - it lands on the first solid ground below, or rests at the
+// water surface if there's none (a gravestone never disappears the way a
+// lost crate does).
+function updateGravestones(rt: MatchRuntime, dt: number): void {
+  for (const stone of rt.gravestones) {
+    if (stone.landed) continue;
+    stone.vy += GRAVITY * dt;
+    stone.y += stone.vy * dt;
+    if (isSolid(rt.terrain, stone.x, stone.y) || stone.y >= waterLevelY(rt.terrain)) {
+      stone.landed = true;
+      stone.vy = 0;
+    }
+  }
+}
+
+// At most one crate is ever on the map (see CRATE_SPAWN_INTERVAL_TURNS), so
+// there's no need to worry about one explosion catching several crates or a
+// chain reaction between them - just whether this tick's newly created
+// explosions reach the one that's there. Detonates it in place using the
+// grenade's own stats regardless of which weapon actually caused it, per
+// spec: a dropbox "explodes like a grenade" when hit.
+function detonateCratesCaughtInBlast(rt: MatchRuntime, newExplosions: Explosion[]): void {
+  if (newExplosions.length === 0 || rt.crates.length === 0) return;
+  const remaining: Crate[] = [];
+  for (const crate of rt.crates) {
+    const hit = newExplosions.some((ex) => Math.hypot(crate.x - ex.x, crate.y - ex.y) <= ex.radius);
+    if (hit) {
+      detonateAt(rt, 'grenade', crate.x, crate.y);
+    } else {
+      remaining.push(crate);
+    }
+  }
+  rt.crates = remaining;
+}
+
 function rainAirstrike(rt: MatchRuntime, weaponKey: WeaponKey): void {
   const margin = Math.min(AIRSTRIKE_EDGE_MARGIN, rt.terrain.width / 4);
   const usableWidth = Math.max(1, rt.terrain.width - margin * 2);
@@ -276,9 +315,24 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     return;
   }
 
+  // Ahead of this tick's death loop (which may push new gravestones below),
+  // same convention updateCrates/spawnCrateIfDue already follow: an entity
+  // created this tick sits still until the *next* tick's physics pass,
+  // rather than also falling within the very frame it was born.
+  updateGravestones(rt, dt);
+
+  // Baseline for detonateCratesCaughtInBlast below: only explosions created
+  // during this tick (from any source - a fired weapon, a chained crate
+  // blast, a worm's own death blast) should ever be checked against crates,
+  // never one that's just lingering on screen from an earlier frame.
+  const explosionsBefore = rt.explosions.length;
+
   const active = currentWorm(rt.match);
   const worm = active.worm;
+  const activeTeam = rt.teams.find((t) => t.playerId === active.playerId)!;
   const weaponKey = WEAPON_KEYS[input.selectedWeapon - 1] ?? 'bazooka';
+  const ammoRemaining = activeTeam.ammo?.[weaponKey];
+  const weaponDepleted = ammoRemaining !== undefined && ammoRemaining <= 0;
   const canAct = worm.alive && !worm.dying;
 
   // A dead or dying active worm can no longer swing on the rope, aim, or
@@ -313,7 +367,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
       if (w === worm) activeWormDiedInWater = true;
     }
     if (tickDeathAnimation(w, dt * 1000)) {
-      rt.gravestones.push({ x: w.x, y: w.y });
+      rt.gravestones.push({ x: w.x, y: w.y, vy: 0, landed: isSolid(rt.terrain, w.x, w.y) });
       detonateDeath(rt, w);
     }
   }
@@ -335,7 +389,11 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     // key re-triggering the charge branch) pushes a second projectile and
     // resets retirementTimer, which can repeatedly postpone the turn ending
     // until the 45s turn timer finally rescues it.
-    if (rt.retirementTimer === null) {
+    // A weapon that's used up its per-match allowance (see
+    // WEAPON_MATCH_LIMITS) simply doesn't respond to fire input at all - no
+    // charge starts, nothing fires. The player can still select it (so the
+    // HUD can show it's spent) but pressing fire is a no-op.
+    if (rt.retirementTimer === null && !weaponDepleted) {
       const chargeableWeapon = WEAPONS[weaponKey].chargeable;
       if (input.firing && chargeableWeapon) {
         rt.charging = true;
@@ -344,9 +402,11 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
         fireWeapon(rt, worm, weaponKey, rt.chargePower);
         rt.charging = false;
         rt.chargePower = 0;
+        if (ammoRemaining !== undefined) activeTeam.ammo![weaponKey] = ammoRemaining - 1;
       } else if (input.firing && !chargeableWeapon) {
         fireWeapon(rt, worm, weaponKey, 1);
         input.firing = false;
+        if (ammoRemaining !== undefined) activeTeam.ammo![weaponKey] = ammoRemaining - 1;
       }
     }
   }
@@ -370,6 +430,8 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   }
 
   for (const e of rt.explosions) e.timer -= dt;
+  const newExplosions = rt.explosions.slice(explosionsBefore);
+  detonateCratesCaughtInBlast(rt, newExplosions);
   rt.explosions = rt.explosions.filter((e) => e.timer > 0);
   for (const s of rt.splashes) s.timer -= dt;
   rt.splashes = rt.splashes.filter((s) => s.timer > 0);
@@ -422,6 +484,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     rt.rope = null;
     rt.turnBannerTimer = TURN_BANNER_DURATION_MS;
     rt.shotgunTracer = null;
+    input.selectedWeapon = 1;
     rt.turnsSinceCrateEvent += 1;
     if (rt.turnsSinceCrateEvent >= CRATE_SPAWN_INTERVAL_TURNS) spawnCrateIfDue(rt);
   }

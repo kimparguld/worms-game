@@ -1,10 +1,10 @@
 import { WATER_BAND_HEIGHT_FRACTION } from './constants.js';
 import { generateDecorations } from './terrainDecorations.js';
-import { computeAllowedIntervals, sampleFromIntervals } from './intervalSampling.js';
+import { computeAllowedIntervals, sampleFromIntervals, TOP_CLEARANCE_FRACTION } from './intervalSampling.js';
 import type { Terrain } from './types.js';
 
 // The Y coordinate of the water's surface - fixed at the bottom of the map,
-// beneath the deepest a mountain/cliff/building can generate, so it's only
+// beneath the deepest a mountain/branch/building can generate, so it's only
 // ever revealed where terrain has been dug or blown away down to it.
 export function waterLevelY(terrain: Terrain): number {
   return terrain.height * (1 - WATER_BAND_HEIGHT_FRACTION);
@@ -67,10 +67,10 @@ const SPAWN_MARGIN_FRACTION = 0.08;
 // Picks 4 worm spawn X columns, expressed as fractions of the game's width
 // so this works at any resolution - createMatchRuntime in matchLoop.ts reads
 // these back off the generated Terrain (see createTerrain) to place worms at
-// exactly these columns, so the two always agree. Cliffs, buildings, lakes,
-// and floating islands are all kept clear of these columns (plus a margin)
-// so a worm can never spawn walled in by a cliff face, on top of/squeezed
-// against a building, or dropped in a lake.
+// exactly these columns, so the two always agree. Branches, buildings,
+// lakes, and floating islands are all kept clear of these columns (plus a
+// margin) so a worm can never spawn walled in by a branch, on top of/
+// squeezed against a building, or dropped in a lake.
 //
 // The usable width is split into SPAWN_COUNT equal slots and one column is
 // picked at a random point inside each - this guarantees a minimum spacing
@@ -125,6 +125,20 @@ function pickGroundTextureKey(): string {
 // - so this tries honoring both constraints first, and only drops the
 // softer extraForbidden one if that leaves nothing, rather than silently
 // dropping both the way a single-tier fallback would.
+// Builds each spawn column's own forbidden zone - the span of center
+// fractions at which an item of this half-width would come within
+// SPAWN_EXCLUSION_MARGIN_FRACTION of that column. Shared by
+// sampleExcludingSpawnColumns and branchForbiddenIntervals below so the two
+// can't silently drift out of sync on how wide a spawn column's exclusion
+// zone actually is (previously duplicated verbatim between
+// sampleExcludingSpawnColumns and the now-folded-in hasSafeSpawnClearance).
+function spawnForbiddenIntervals(spawnFractions: number[], halfWidthFraction: number): Array<[number, number]> {
+  return spawnFractions.map((spawnFraction): [number, number] => [
+    spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
+    spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  ]);
+}
+
 function sampleExcludingSpawnColumns(
   rangeMin: number,
   rangeMax: number,
@@ -132,10 +146,7 @@ function sampleExcludingSpawnColumns(
   spawnFractions: number[],
   extraForbiddenFractions: Array<[number, number]> = [],
 ): number {
-  const spawnForbidden: Array<[number, number]> = spawnFractions.map((spawnFraction) => [
-    spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
-    spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
-  ]);
+  const spawnForbidden = spawnForbiddenIntervals(spawnFractions, halfWidthFraction);
 
   const withExtra = computeAllowedIntervals(rangeMin, rangeMax, [...spawnForbidden, ...extraForbiddenFractions]);
   const sampled = sampleFromIntervals(withExtra);
@@ -188,7 +199,7 @@ const BUILDING_WIDTH_MIN_FRACTION = 0.06;
 const BUILDING_WIDTH_MAX_FRACTION = 0.11;
 const BUILDING_RISE_MIN_FRACTION = 0.14;
 const BUILDING_RISE_MAX_FRACTION = 0.26;
-// Even when a building lands on top of an already-capped cliff, it still gets
+// Even when a building lands on unusually high natural ground, it still gets
 // this much height of its own, so a building is always visible as building
 // material rather than collapsing to a zero-height sliver.
 const BUILDING_MIN_HEIGHT_FRACTION = 0.08;
@@ -298,10 +309,10 @@ function computeGroundHeights(
 // Deterministically samples a building's startX such that its footprint
 // (including the spawn margin) never overlaps a known spawn column, nor a
 // lake's footprint. Reframed as picking the building's *center* fraction
-// (reusing the same sampleExcludingSpawnColumns helper cliffs use) over the
-// valid center range [halfWidthFraction, 1 - halfWidthFraction], then
-// converted back to a pixel startX and clamped to the valid
-// [0, width - buildingWidth] start range.
+// (reusing the same sampleExcludingSpawnColumns helper lakes and floating
+// islands use) over the valid center range [halfWidthFraction,
+// 1 - halfWidthFraction], then converted back to a pixel startX and clamped
+// to the valid [0, width - buildingWidth] start range.
 //
 // Lakes are excluded (not just naturally avoided) because a building's
 // facade is drawn down to *its own column's* natural ground height (see
@@ -446,7 +457,14 @@ function stampCircle(
   const maxY = Math.min(bottomClearanceRow, Math.ceil(cy + radiusY));
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      if (((x - cx) / radiusX) ** 2 + ((y - cy) / radiusY) ** 2 <= 1) mask[y * width + x] = 1;
+      const i = y * width + x;
+      // Never overwrite building material (mask value 2) - painting over it
+      // with plain ground would carve a dirt-textured gash through a
+      // building's roof/wall palette and silently contradict the "buildings
+      // ... unaffected" guarantee every other feature respects (see
+      // applyFloatingIslands' own surfaceRow clamp for that same guarantee,
+      // enforced there by never stamping over existing terrain at all).
+      if (mask[i] !== 2 && ((x - cx) / radiusX) ** 2 + ((y - cy) / radiusY) ** 2 <= 1) mask[i] = 1;
     }
   }
 }
@@ -458,10 +476,69 @@ function stampCircle(
 // relative to the current radius (BRANCH_STEP_FRACTION) keeps consecutive
 // stamped circles overlapping enough to read as one continuous tube rather
 // than a string of separate blobs.
-function applyBranch(mask: Uint8Array, width: number, height: number, startXFraction: number): void {
-  const topClearanceRow = Math.ceil(height * 0.19) + 2; // same budget every other feature respects
+//
+// intervalMinFraction/intervalMaxFraction bound the branch's own permitted
+// x range - the safe sub-interval its own start was sampled from (see
+// applyBranches below). The walk's x is clamped to this interval on top of
+// the existing ±maxWander-around-its-own-start clamp, so the walk is
+// *physically* unable to leave the safe interval rather than merely being
+// kept out of spawn/building zones probabilistically - see C1 in the final
+// whole-branch review, which is what lets applyBranches reserve a much
+// narrower exclusion margin than before around every spawn column.
+//
+// Returns false (and paints nothing) if the branch never got a real place to
+// grow from: a start column with no solid surface at all - a lake's fully
+// open center, not just its shallow edge (see I3 in the same review) - and
+// no real ground anywhere else in the permitted interval either. The caller
+// treats that exactly like any other failed placement and retries the
+// branch elsewhere (see applyBranches).
+function applyBranch(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  startXFraction: number,
+  intervalMinFraction: number,
+  intervalMaxFraction: number,
+): boolean {
+  // +2, not the +1 every other feature (e.g. applyFloatingIslands) uses: a
+  // branch's own landing cap is the first landform whose surface can
+  // legitimately sit flush with the shared top-clearance line, so it needs
+  // one extra row of headroom below that line for a decoration anchored on
+  // the cap to have room for its own footprint - stampFootprint's clamp in
+  // terrainDecorations.ts assumes at least 1 row of clearance below its own
+  // anchor's surface, which only +2 here (not +1) guarantees for a
+  // cap-anchored decoration.
+  const topClearanceRow = Math.ceil(height * TOP_CLEARANCE_FRACTION) + 2;
   const bottomClearanceRow = Math.floor(height * (1 - WATER_BAND_HEIGHT_FRACTION)) - 1;
-  const startX = Math.round(startXFraction * width);
+  const intervalMinX = Math.round(intervalMinFraction * width);
+  const intervalMaxX = Math.round(intervalMaxFraction * width);
+  let startX = Math.round(startXFraction * width);
+
+  // A lake's deep center reads as a fully empty column (surfaceYAt returns
+  // height, since nothing solid exists there at all) - starting the walk
+  // there produces a spire standing in open water, sliced flat at the
+  // waterline, rather than the "starts near a lake's shallow edge" look the
+  // spec intended. Search outward within the branch's own safe interval for
+  // the nearest column that does have real ground instead.
+  if (surfaceYAt(mask, width, height, startX) >= height) {
+    let found = -1;
+    const maxOffset = Math.max(intervalMaxX - startX, startX - intervalMinX);
+    for (let offset = 1; offset <= maxOffset; offset++) {
+      const left = startX - offset;
+      const right = startX + offset;
+      if (left >= intervalMinX && surfaceYAt(mask, width, height, left) < height) {
+        found = left;
+        break;
+      }
+      if (right <= intervalMaxX && surfaceYAt(mask, width, height, right) < height) {
+        found = right;
+        break;
+      }
+    }
+    if (found === -1) return false; // the whole interval is open water - skip, caller retries elsewhere
+    startX = found;
+  }
+
   let y = surfaceYAt(mask, width, height, startX);
   const climbHeight = randomBetween(BRANCH_HEIGHT_MIN_FRACTION, BRANCH_HEIGHT_MAX_FRACTION) * height;
   const topY = Math.max(topClearanceRow, y - climbHeight);
@@ -470,6 +547,8 @@ function applyBranch(mask: Uint8Array, width: number, height: number, startXFrac
   const baseRadius = randomBetween(BRANCH_BASE_RADIUS_MIN_FRACTION, BRANCH_BASE_RADIUS_MAX_FRACTION) * width;
   const tipRadius = baseRadius * BRANCH_TIP_RADIUS_FRACTION;
   const maxWander = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * width;
+  const wanderMinX = Math.max(intervalMinX, startX - maxWander);
+  const wanderMaxX = Math.min(intervalMaxX, startX + maxWander);
 
   let x = startX;
   let radius = baseRadius;
@@ -478,73 +557,136 @@ function applyBranch(mask: Uint8Array, width: number, height: number, startXFrac
     const progress = Math.min(1, Math.max(0, (startY - y) / (startY - topY)));
     radius = baseRadius + (tipRadius - baseRadius) * progress;
     y -= Math.max(1, radius * BRANCH_STEP_FRACTION);
-    x = Math.min(
-      startX + maxWander,
-      Math.max(startX - maxWander, x + randomBetween(-1, 1) * radius * BRANCH_WANDER_FRACTION),
-    );
+    x = Math.min(wanderMaxX, Math.max(wanderMinX, x + randomBetween(-1, 1) * radius * BRANCH_WANDER_FRACTION));
   }
   // Landing cap: wider and squashed, same technique applyFloatingIslands
   // uses for its lobes, for a rounded chunk instead of a bare tube end.
   const capRadius = radius * BRANCH_CAP_RADIUS_MULTIPLIER;
   stampCircle(mask, width, x, y, capRadius, capRadius * BRANCH_CAP_SQUASH, topClearanceRow, bottomClearanceRow);
+  return true;
 }
 
-// True only if sampleExcludingSpawnColumns would find a safe point without
-// falling through to its 3rd-tier fallback (pointFarthestFromSpawnColumns),
-// which gives no minimum-distance guarantee at all - fine for lakes (soft,
-// sine-blended edges, safe to land close to a spawn column under it) but
-// not for branches (sharp, hard-edged - the whole point of the feature).
-// Mirrors sampleExcludingSpawnColumns's own tier-2 check (spawn columns
-// alone, no extraForbiddenFractions) so this predicts the real call's
-// behavior exactly, not approximately.
-function hasSafeSpawnClearance(
+// Forbidden intervals for a branch's own start point, covering both spawn
+// columns and building roofs at the same width (the branch's own painted
+// radius plus the standard spawn margin). See I1 in the final whole-branch
+// review: unlike sampleExcludingSpawnColumns's extraForbiddenFractions (a
+// soft, droppable tier - see that function's own comment), a branch treats
+// building exclusion as just as hard a requirement as spawn-column
+// exclusion, since a branch sprouting out of a building's flat roof looks
+// exactly as artificial as one walling in a worm's spawn point.
+function branchForbiddenIntervals(
+  spawnFractions: number[],
+  buildingRanges: Array<[number, number]>,
+  halfWidthFraction: number,
+): Array<[number, number]> {
+  const spawn = spawnForbiddenIntervals(spawnFractions, halfWidthFraction);
+  const buildings: Array<[number, number]> = buildingRanges.map(([lo, hi]): [number, number] => [
+    lo - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
+    hi + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  ]);
+  return [...spawn, ...buildings];
+}
+
+// Attempts to place one branch somewhere in [rangeMin, rangeMax], avoiding
+// `forbidden` (spawn columns + buildings, see branchForbiddenIntervals) and
+// staying at least minSeparationFraction from every already-placed branch's
+// own start (so a map-wide retry - see applyBranches below - can't stack a
+// branch right on top of one that already succeeded). The walk is then
+// clamped to whichever safe sub-interval the sampled start actually falls
+// in (not just the caller's whole [rangeMin, rangeMax]) - see applyBranch's
+// own interval parameters. Returns the placed branch's own start fraction on
+// success (and records it into placedFractions), or null if there's nowhere
+// left that satisfies all of that, or if applyBranch itself couldn't find
+// real ground to start from (see I3) - either way, the caller decides
+// whether to retry elsewhere.
+function placeBranchInInterval(
+  mask: Uint8Array,
+  width: number,
+  height: number,
   rangeMin: number,
   rangeMax: number,
-  halfWidthFraction: number,
-  spawnFractions: number[],
-): boolean {
-  const spawnForbidden: Array<[number, number]> = spawnFractions.map((spawnFraction) => [
-    spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
-    spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  forbidden: Array<[number, number]>,
+  placedFractions: number[],
+  minSeparationFraction: number,
+): number | null {
+  if (rangeMin >= rangeMax) return null; // range too narrow for this map size - skip rather than sample garbage
+  const separation: Array<[number, number]> = placedFractions.map((f): [number, number] => [
+    f - minSeparationFraction,
+    f + minSeparationFraction,
   ]);
-  return computeAllowedIntervals(rangeMin, rangeMax, spawnForbidden).length > 0;
+  const allowed = computeAllowedIntervals(rangeMin, rangeMax, [...forbidden, ...separation]);
+  const sampled = sampleFromIntervals(allowed);
+  if (sampled === null) return null;
+  const interval = allowed.find(([lo, hi]) => sampled >= lo && sampled <= hi) ?? [rangeMin, rangeMax];
+  if (!applyBranch(mask, width, height, sampled, interval[0], interval[1])) return null;
+  placedFractions.push(sampled);
+  return sampled;
 }
 
-// Grows BRANCH_COUNT_MIN-MAX branches, each from its own slot of the map's
-// width (the same slot-per-feature pattern pickSpawnFractions uses for
-// worms) so they spread out rather than clumping. halfWidthFraction is the
-// branch's own max wander, used to inset each slot's own [slotMin, slotMax]
-// bounds - widening this would shrink every slot toward zero width at
-// BRANCH_COUNT_MAX, so it stays narrow. Spawn-column safety instead gets its
-// own wider spawnExclusionHalfWidthFraction (wander plus the branch's own
-// worst-case painted radius - the cap's effective radius is smaller than
-// this, so the base radius alone covers both body and cap), passed only to
-// sampleExcludingSpawnColumns so it widens the spawn exclusion zone without
-// touching slot sizing. Lakes are deliberately not excluded (a branch
-// starting near a lake's shallow edge matches the reference art); building
-// roofs are, via buildingColumnRanges, since a branch sprouting out of a
-// flat roof would look artificial.
-function applyBranches(mask: Uint8Array, width: number, height: number, spawnFractions: number[]): void {
+// Grows BRANCH_COUNT_MIN-MAX branches. Each first tries its own slot (the
+// same slot-per-feature pattern pickSpawnFractions uses for worms, so
+// branches spread out across the map rather than clumping); a branch whose
+// slot has no safe room left (too narrow, or eaten by a spawn/building
+// exclusion zone) isn't just dropped - it's retried across the *whole* map
+// instead, with only a minimum separation from branches already placed, so
+// the actual placed count tracks the randomly-rolled `count` far more often
+// than a bare per-slot skip did. See C1 in the final whole-branch review:
+// the old per-slot-only version measured a mean of ~1.1 placed branches/map
+// at production scale against a rolled 3-5, with 19-24% of maps getting
+// none at all.
+//
+// The walk itself (see applyBranch) is now clamped to stay inside whichever
+// safe sub-interval its own start was sampled from, so it is *physically*
+// unable to wander into a spawn column's or building's exclusion zone -
+// that's what lets the exclusion half-width here shrink to just the
+// branch's own worst-case painted radius (BRANCH_BASE_RADIUS_MAX_FRACTION)
+// instead of also reserving the full wander band on top of it (the old
+// spawnExclusionHalfWidthFraction = wander + radius), roughly quadrupling
+// how much of the map is actually placeable. Building roofs are excluded
+// the same hard way spawn columns are (see branchForbiddenIntervals and
+// I1); lakes are deliberately not excluded here (a branch starting near a
+// lake's shallow edge matches the reference art) - applyBranch's own
+// lake-center handling covers the one case that *is* excluded, a lake's
+// fully open water (see I3).
+function applyBranches(mask: Uint8Array, width: number, height: number, spawnFractions: number[]): number {
   const count = randomInt(BRANCH_COUNT_MIN, BRANCH_COUNT_MAX);
-  const halfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH;
-  const spawnExclusionHalfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH + BRANCH_BASE_RADIUS_MAX_FRACTION;
+  const slotHalfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH;
+  const exclusionHalfWidthFraction = BRANCH_BASE_RADIUS_MAX_FRACTION;
+  // Keeps two branches' own wander bands from overlapping outright, without
+  // being so wide that a map-wide retry rarely finds room.
+  const minSeparationFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * 2;
   const slotFraction = 1 / count;
-  const buildingForbidden = buildingColumnRanges(mask, width, height);
+  const buildingRanges = buildingColumnRanges(mask, width, height);
+  const forbidden = branchForbiddenIntervals(spawnFractions, buildingRanges, exclusionHalfWidthFraction);
 
+  const placedFractions: number[] = [];
+  let shortfall = 0;
   for (let i = 0; i < count; i++) {
-    const slotMin = i * slotFraction + halfWidthFraction;
-    const slotMax = (i + 1) * slotFraction - halfWidthFraction;
-    if (slotMin >= slotMax) continue; // slot too narrow for this map size - skip rather than sample garbage
-    if (!hasSafeSpawnClearance(slotMin, slotMax, spawnExclusionHalfWidthFraction, spawnFractions)) continue;
-    const startXFraction = sampleExcludingSpawnColumns(
+    const slotMin = i * slotFraction + slotHalfWidthFraction;
+    const slotMax = (i + 1) * slotFraction - slotHalfWidthFraction;
+    const placedFraction = placeBranchInInterval(
+      mask,
+      width,
+      height,
       slotMin,
       slotMax,
-      spawnExclusionHalfWidthFraction,
-      spawnFractions,
-      buildingForbidden,
+      forbidden,
+      placedFractions,
+      minSeparationFraction,
     );
-    applyBranch(mask, width, height, startXFraction);
+    if (placedFraction === null) shortfall++;
   }
+
+  // Retry every branch a slot couldn't hold, map-wide rather than confined
+  // to that one narrow slot - the fix for the second half of C1 (a skipped
+  // slot used to just mean one fewer branch, full stop).
+  const mapMin = slotHalfWidthFraction;
+  const mapMax = 1 - slotHalfWidthFraction;
+  for (let i = 0; i < shortfall; i++) {
+    placeBranchInInterval(mask, width, height, mapMin, mapMax, forbidden, placedFractions, minSeparationFraction);
+  }
+
+  return placedFractions.length;
 }
 
 // Stamps a small cluster of overlapping circular lobes (an irregular blob,
@@ -555,13 +697,13 @@ function applyBranches(mask: Uint8Array, width: number, height: number, spawnFra
 //
 // Every write is clamped against the *current* mask's own topmost surface
 // per column (surfaceRow, read once before any island is placed) and the
-// same top-clearance budget every other feature respects. A cliff or
+// same top-clearance budget every other feature respects. A branch or
 // building can reach much higher than the average natural silhouette, so
-// this project's earlier fixed Y-band approach could let an island merge
-// into (and round off) a cliff face it happened to land near - clamping
-// against the real per-column surface instead guarantees an island can
-// never touch, let alone reshape, existing terrain, regardless of where a
-// cliff or building happens to sit.
+// this project's earlier fixed Y-band approach (from when cliffs existed)
+// could let an island merge into (and round off) a cliff face it happened to
+// land near - clamping against the real per-column surface instead
+// guarantees an island can never touch, let alone reshape, existing terrain,
+// regardless of where a branch or building happens to sit.
 function applyFloatingIslands(mask: Uint8Array, width: number, height: number, spawnFractions: number[]): void {
   const surfaceRow = new Int32Array(width).fill(height);
   for (let x = 0; x < width; x++) {
@@ -572,7 +714,7 @@ function applyFloatingIslands(mask: Uint8Array, width: number, height: number, s
       }
     }
   }
-  const topClearanceRow = Math.ceil(height * 0.19) + 1;
+  const topClearanceRow = Math.ceil(height * TOP_CLEARANCE_FRACTION) + 1;
 
   const count = randomInt(FLOATING_ISLAND_COUNT_MIN, FLOATING_ISLAND_COUNT_MAX);
   for (let i = 0; i < count; i++) {
@@ -614,15 +756,19 @@ function applyFloatingIslands(mask: Uint8Array, width: number, height: number, s
 // columns clear without having to know about them; tests that need to pin
 // down exactly where those columns are (e.g. to assert nothing ever lands on
 // them) can pass their own instead.
-export function generateSilhouetteMask(
+// Fills mask's base silhouette (sky / ground / building) from already-
+// computed ground heights and building columns - factored out of
+// generateSilhouetteMask so countPlacedBranchesForTest (below) can
+// reconstruct the exact same pre-branch mask a real match would use,
+// without duplicating this loop.
+function fillBaseMask(
+  mask: Uint8Array,
   width: number,
   height: number,
-  spawnFractions: number[] = pickSpawnFractions(),
-): Uint8Array {
-  const mask = new Uint8Array(width * height);
-  const { heights, lakeRanges } = computeGroundHeights(width, height, spawnFractions);
-  const naturalHeights = heights.slice();
-  const buildingColumns = applyBuildings(heights, width, height, lakeRanges, spawnFractions);
+  heights: Float64Array,
+  naturalHeights: Float64Array,
+  buildingColumns: Set<number>,
+): void {
   // No column is ever solid this far down, regardless of its generated
   // height - it's reserved for water, only ever exposed where terrain gets
   // dug or blown away down to it.
@@ -642,9 +788,43 @@ export function generateSilhouetteMask(
       }
     }
   }
+}
+
+export function generateSilhouetteMask(
+  width: number,
+  height: number,
+  spawnFractions: number[] = pickSpawnFractions(),
+): Uint8Array {
+  const mask = new Uint8Array(width * height);
+  const { heights, lakeRanges } = computeGroundHeights(width, height, spawnFractions);
+  const naturalHeights = heights.slice();
+  const buildingColumns = applyBuildings(heights, width, height, lakeRanges, spawnFractions);
+  fillBaseMask(mask, width, height, heights, naturalHeights, buildingColumns);
   applyBranches(mask, width, height, spawnFractions);
   applyFloatingIslands(mask, width, height, spawnFractions);
   return mask;
+}
+
+// Test-only entry point (see tests/terrain.test.ts's "branches > density"
+// block): reconstructs the exact same pre-branch mask generateSilhouetteMask
+// itself builds (mountain, lakes, buildings, base fill - see fillBaseMask),
+// then calls the real applyBranches and returns how many branches it
+// actually placed. Exists so that describe block can assert directly on
+// branch placement (the thing C1 in the final whole-branch review found
+// broken) rather than an emergent jump/cluster signature shared with
+// islands and buildings, which stayed green even with applyBranches deleted
+// outright.
+export function countPlacedBranchesForTest(
+  width: number,
+  height: number,
+  spawnFractions: number[] = pickSpawnFractions(),
+): number {
+  const mask = new Uint8Array(width * height);
+  const { heights, lakeRanges } = computeGroundHeights(width, height, spawnFractions);
+  const naturalHeights = heights.slice();
+  const buildingColumns = applyBuildings(heights, width, height, lakeRanges, spawnFractions);
+  fillBaseMask(mask, width, height, heights, naturalHeights, buildingColumns);
+  return applyBranches(mask, width, height, spawnFractions);
 }
 
 export function createTerrain(width: number, height: number): Terrain {

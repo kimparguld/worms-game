@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { createTerrain, generateSilhouetteMask, isSolid, carveCircle, findSurfaceY } from '../src/terrain.js';
+import {
+  createTerrain,
+  generateSilhouetteMask,
+  isSolid,
+  carveCircle,
+  findSurfaceY,
+  countPlacedBranchesForTest,
+} from '../src/terrain.js';
 
 describe('generateSilhouetteMask', () => {
   it('produces empty sky in the upper region and solid ground in the lower region', () => {
@@ -34,7 +41,16 @@ describe('generateSilhouetteMask branches', () => {
   it('carves at least one near-vertical wall face for the ninja rope to grapple', () => {
     const width = 200,
       height = 200;
-    for (let attempt = 0; attempt < 40; attempt++) {
+    // "At least one of N attempts", matching the sibling "spreads branches
+    // across the map" test's shape below - not "every one of 40 attempts",
+    // which the final whole-branch review measured is a materially stronger
+    // assertion than the generator's true per-map guarantee at this small
+    // scale (measured ~0.63% true failure rate per map, which predicts a
+    // ~22% chance of failing an all-40-must-pass loop) even though the
+    // invariant holds solidly at real map size (0/300 measured at
+    // 2240x1260, the shipped WORLD_WIDTH/WORLD_HEIGHT).
+    let sawWallFace = false;
+    for (let attempt = 0; attempt < 40 && !sawWallFace; attempt++) {
       const mask = generateSilhouetteMask(width, height);
       let maxJump = 0;
       for (let x = 1; x < width; x++) {
@@ -54,8 +70,9 @@ describe('generateSilhouetteMask branches', () => {
         }
         maxJump = Math.max(maxJump, Math.abs(curHeight - prevHeight));
       }
-      expect(maxJump).toBeGreaterThan(height * 0.15);
+      if (maxJump > height * 0.15) sawWallFace = true;
     }
+    expect(sawWallFace).toBe(true);
   });
 
   it('spreads branches across the map: at least 2 distinct wall clusters show up in some attempt', () => {
@@ -101,13 +118,48 @@ describe('generateSilhouetteMask branches', () => {
   it('never lands a branch cap above the shared top-clearance line', () => {
     const width = 200,
       height = 200;
+    // Count-then-assert-once, matching the "height budget" describe block's
+    // own pattern below - the per-cell expect() version of this loop was
+    // ~304,000 individual assertions and the second-slowest test in the
+    // file for no benefit: a failure reports one cell either way.
     for (let attempt = 0; attempt < 40; attempt++) {
       const mask = generateSilhouetteMask(width, height);
       const clearRows = Math.floor(height * 0.19);
+      let solidInClearZone = 0;
       for (let i = 0; i < clearRows * width; i++) {
-        expect(mask[i]).toBe(0);
+        if (mask[i] !== 0) solidInClearZone++;
       }
+      expect(solidInClearZone).toBe(0);
     }
+  });
+});
+
+describe('generateSilhouetteMask branches density', () => {
+  // Regression coverage for C1 in the final whole-branch review
+  // (.superpowers/sdd/2026-09-21-organic-branch-terrain/final-review.md):
+  // before that fix, production-scale maps (2240x1260, the real
+  // WORLD_WIDTH/WORLD_HEIGHT) measured a mean of ~1.1 placed branches/map
+  // against the spec's 3-5 target, with 19-24% of maps getting zero. The 3
+  // tests in the describe block above all still pass even with
+  // applyBranches deleted outright - floating islands and building edges
+  // alone satisfy their jump/cluster assertions - so this calls the actual
+  // placement count directly (via countPlacedBranchesForTest, exported from
+  // terrain.ts for this purpose) instead of an emergent signature shared
+  // with other landforms, so it fails immediately if branch placement
+  // regresses or disappears.
+  it('places a mean branch count well above the pre-fix ~1.1/map baseline, with few zero-branch maps', () => {
+    const width = 960,
+      height = 540;
+    const attempts = 80;
+    let total = 0;
+    let zeroBranchMaps = 0;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const count = countPlacedBranchesForTest(width, height);
+      total += count;
+      if (count === 0) zeroBranchMaps++;
+    }
+    expect(total / attempts).toBeGreaterThan(2);
+    expect(zeroBranchMaps / attempts).toBeLessThan(0.15);
   });
 });
 
@@ -167,7 +219,7 @@ describe('generateSilhouetteMask floating islands', () => {
 });
 
 describe('generateSilhouetteMask height budget', () => {
-  // Nothing may reach the top of the screen: a cliff or building clipped by
+  // Nothing may reach the top of the screen: a branch or building clipped by
   // the top edge looks broken, and a worm spawned on one lands behind the HUD.
   // The code's documented budget guarantees clear space up to y = 0.20 *
   // height (see the comment atop terrain.ts); this pins that to 0.19 rather
@@ -193,20 +245,20 @@ describe('generateSilhouetteMask spawn columns', () => {
   // pickSpawnFractions), but generateSilhouetteMask still accepts an
   // explicit set so this can pin down a fixed set of columns and assert the
   // exclusion guarantee holds for whatever columns it's given. Neither a
-  // cliff nor a building may ever land on or hug one of these columns: a
+  // branch nor a building may ever land on or hug one of these columns: a
   // building would put mask value 2 (not walkable ground) at the spawn
-  // point, and a cliff face landing there would wall a worm in on one side,
-  // or leave a bare pixel-thin ledge to spawn on.
-  it('never puts a cliff face or a building at any of the four spawn X columns', () => {
+  // point, and a branch landing there would wall a worm in on one side, or
+  // leave a bare pixel-thin ledge to spawn on.
+  it('never puts a branch or a building at any of the four spawn X columns', () => {
     const width = 960,
       height = 540;
     const spawnColumns = [150, 200, 760, 810];
     const spawnFractions = spawnColumns.map((x) => x / width);
     // Natural mountain terrain is smooth sine-wave silhouette: adjacent
-    // columns shift by a couple of pixels at most. A cliff, by contrast, is
+    // columns shift by a couple of pixels at most. A branch, by contrast, is
     // required elsewhere in this file to jump by at least 0.15 * height. Use
     // a bound well below that (but comfortably above the natural slope) so
-    // this only trips on an actual cliff face landing on the spawn column.
+    // this only trips on an actual branch landing on the spawn column.
     const maxNaturalSlope = height * 0.05;
 
     function surfaceHeightAndMask(mask: Uint8Array, x: number): { height: number; maskValue: number } {
@@ -241,7 +293,7 @@ describe('createTerrain honors its own random spawn columns even under lake pres
   // guarantee below (never on a spawn column) must still hold - it's the
   // softer lake-depth guarantee (see the "building depth" describe block)
   // that's allowed to give way instead.
-  it('never leaves a spawn column covered by a building or hugged by a cliff face, across many random layouts', () => {
+  it('never leaves a spawn column covered by a building or hugged by a branch, across many random layouts', () => {
     const width = 300,
       height = 200;
     const maxNaturalSlope = height * 0.05;
@@ -333,19 +385,22 @@ describe('findSurfaceY', () => {
 
 describe('generateSilhouetteMask building depth', () => {
   // A building's facade is drawn down to its own column's natural
-  // (pre-building) ground height. That can legitimately go quite deep when a
-  // building straddles one of the map's cliffs - but never past the
-  // mountain's own worst-case natural trough (MOUNTAIN_BASE_FRACTION minus
-  // every octave's max amplitude in terrain.ts, ~0.15 of the height), since
-  // cliffs only ever raise ground, never lower it. A lake is the one thing
-  // that lowers ground further, down to ~0.05 near the water line - if a
-  // building's footprint ever overlapped one, its facade for that column
-  // would stretch almost down to the water line instead: a visible "spike"
-  // of building texture cutting deep into what should be plain dirt. This
-  // pins the boundary between those two cases (0.12, comfortably between the
-  // lake's ~0.05 and the mountain's ~0.15) to catch a regression in
+  // (pre-building) ground height. That can legitimately go fairly deep when
+  // a building lands over one of the mountain's own natural troughs
+  // (MOUNTAIN_BASE_FRACTION minus every octave's max amplitude in
+  // terrain.ts, ~0.15 of the height) - but never past that natural worst
+  // case, since nothing else still lowers `heights` below the plain
+  // mountain silhouette (branches, unlike the old cliffs, never touch
+  // `heights` at all - see applyBranches in terrain.ts, which stamps
+  // straight into the 2D mask instead). A lake is the one thing that lowers
+  // ground further, down to ~0.05 near the water line - if a building's
+  // footprint ever overlapped one, its facade for that column would stretch
+  // almost down to the water line instead: a visible "spike" of building
+  // texture cutting deep into what should be plain dirt. This pins the
+  // boundary between those two cases (0.12, comfortably between the lake's
+  // ~0.05 and the mountain's ~0.15) to catch a regression in
   // pickBuildingStartX's lake exclusion without flagging the legitimate
-  // cliff case.
+  // natural-trough case.
   // Pins an explicit, clustered-near-the-edges spawnFractions set (the same
   // shape the old fixed SPAWN_EXCLUSION_FRACTIONS used) rather than relying
   // on the default random pickSpawnFractions(): this test is specifically

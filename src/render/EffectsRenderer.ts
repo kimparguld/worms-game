@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { DEPTH_BEHIND_WORMS } from '../render.js';
+import type { Gravestone } from '../types.js';
 
 export class EffectsRenderer {
   private emberEmitter: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -8,7 +9,10 @@ export class EffectsRenderer {
   private muzzleEmitter: Phaser.GameObjects.Particles.ParticleEmitter;
   private dustEmitter: Phaser.GameObjects.Particles.ParticleEmitter;
   private poofEmitter: Phaser.GameObjects.Particles.ParticleEmitter;
-  private gravestoneImages: Phaser.GameObjects.Image[] = [];
+  // Keyed by the Gravestone data object itself (identity, not value) so
+  // each one's Image can be found again every frame to sync its position
+  // while it's still falling - see syncGravestones.
+  private gravestoneImages = new Map<Gravestone, Phaser.GameObjects.Image>();
   private ropeHook: Phaser.GameObjects.Image;
 
   constructor(
@@ -109,10 +113,22 @@ export class EffectsRenderer {
     this.poofEmitter.explode(16, x, y);
   }
 
-  spawnGravestone(x: number, y: number): void {
-    const image = this.scene.add.image(x, y, 'gravestone').setDepth(DEPTH_BEHIND_WORMS);
-    this.gravestoneImages.push(image);
-    this.worldObjects.push(image);
+  // Called every frame with the full current list: creates each stone's
+  // Image the first time it's seen, then keeps following its position while
+  // it's still falling (see the Gravestone type/updateGravestones in
+  // matchLoop.ts) - a landed stone is left alone rather than re-set each
+  // frame, matching how the crate/worm renderers only move what's moving.
+  syncGravestones(gravestones: Gravestone[]): void {
+    for (const stone of gravestones) {
+      const image = this.gravestoneImages.get(stone);
+      if (!image) {
+        const created = this.scene.add.image(stone.x, stone.y, 'gravestone').setDepth(DEPTH_BEHIND_WORMS);
+        this.gravestoneImages.set(stone, created);
+        this.worldObjects.push(created);
+      } else if (!stone.landed) {
+        image.setPosition(stone.x, stone.y);
+      }
+    }
   }
 
   muzzleBurst(x: number, y: number): void {

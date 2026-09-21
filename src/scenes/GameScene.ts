@@ -3,6 +3,7 @@ import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../matchLoop.js';
 import { checkWinner, currentWorm } from '../game.js';
 import {
   updateHud,
+  updateWeaponText,
   turnBannerAlpha,
   turnBannerLabel,
   weaponLabel,
@@ -70,6 +71,8 @@ export class GameScene extends Phaser.Scene {
   private hudRenderer!: HudRenderer;
   private uiCamera!: Phaser.Cameras.Scene2D.Camera;
   private hudText!: Phaser.GameObjects.Text;
+  private weaponText!: Phaser.GameObjects.Text;
+  private weaponIcon!: Phaser.GameObjects.Image;
   private turnBannerText!: Phaser.GameObjects.Text;
 
   private activeWormArrow!: Phaser.GameObjects.Image;
@@ -92,7 +95,6 @@ export class GameScene extends Phaser.Scene {
   private burstedSplashes = new WeakSet<object>();
   private burstedProjectiles = new WeakSet<object>();
   private burstedShotgunTracers = new WeakSet<object>();
-  private burstedGravestones = new WeakSet<object>();
   private burstedCratePickups = new WeakSet<object>();
   private poofedWorms = new WeakSet<Worm>();
   private bannerWasVisible = false;
@@ -245,6 +247,25 @@ export class GameScene extends Phaser.Scene {
       lineSpacing: 4,
     });
     this.uiObjects.push(this.hudText);
+
+    // The weapon line sits below Wind/Time as its own Text object (rather
+    // than one more line appended to hudText) specifically so the icon
+    // beside it can be pinned to this line alone, instead of drifting if the
+    // wind/time text above it ever changes height.
+    const weaponLineY = 58;
+    const weaponIconSize = 22;
+    this.weaponIcon = this.add
+      .image(hudPanelX + 14 + weaponIconSize / 2, weaponLineY + 9, 'bazooka_held')
+      .setDisplaySize(weaponIconSize, weaponIconSize);
+    this.uiObjects.push(this.weaponIcon);
+
+    this.weaponText = this.add.text(hudPanelX + 14 + weaponIconSize + 8, weaponLineY, '', {
+      fontFamily: "'Baloo 2', sans-serif",
+      fontSize: '17px',
+      color: '#fff8e7',
+      lineSpacing: 4,
+    });
+    this.uiObjects.push(this.weaponText);
 
     this.turnBannerText = this.add
       .text(width / 2, height / 2 - 40, '', {
@@ -555,11 +576,6 @@ export class GameScene extends Phaser.Scene {
       this.effectsRenderer.muzzleBurst(tracer.originX, tracer.originY);
       for (const hit of tracer.hits) this.effectsRenderer.muzzleBurst(hit.x, hit.y);
     }
-    for (const stone of this.rt.gravestones) {
-      if (this.burstedGravestones.has(stone)) continue;
-      this.burstedGravestones.add(stone);
-      this.effectsRenderer.spawnGravestone(stone.x, stone.y);
-    }
     for (const pickup of this.rt.cratePickups) {
       if (this.burstedCratePickups.has(pickup)) continue;
       this.burstedCratePickups.add(pickup);
@@ -676,9 +692,13 @@ export class GameScene extends Phaser.Scene {
     }
     this.projectileRenderer.update(this.rt.projectiles);
     this.crateRenderer.update(this.rt.crates);
+    this.effectsRenderer.syncGravestones(this.rt.gravestones);
     this.updateRopeAndTracer(active);
     this.hudRenderer.update(this.rt.teams);
-    updateHud(this.hudText, this.rt.match, sharedInput.selectedWeapon);
+    updateHud(this.hudText, this.rt.match);
+    const activeTeam = this.rt.teams.find((t) => t.playerId === active.playerId);
+    updateWeaponText(this.weaponText, sharedInput.selectedWeapon, activeTeam?.ammo?.[activeWeaponKey]);
+    this.weaponIcon.setTexture(`${activeWeaponKey}_held`);
     this.updateMobileWeaponLabel();
     this.triggerEffectBursts();
     this.triggerMovementDust(delta);
