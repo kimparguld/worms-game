@@ -30,6 +30,87 @@ describe('generateSilhouetteMask', () => {
   });
 });
 
+describe('generateSilhouetteMask branches', () => {
+  it('carves at least one near-vertical wall face for the ninja rope to grapple', () => {
+    const width = 200,
+      height = 200;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      let maxJump = 0;
+      for (let x = 1; x < width; x++) {
+        let prevHeight = 0;
+        for (let y = 0; y < height; y++) {
+          if (mask[y * width + (x - 1)] === 1) {
+            prevHeight = height - y;
+            break;
+          }
+        }
+        let curHeight = 0;
+        for (let y = 0; y < height; y++) {
+          if (mask[y * width + x] === 1) {
+            curHeight = height - y;
+            break;
+          }
+        }
+        maxJump = Math.max(maxJump, Math.abs(curHeight - prevHeight));
+      }
+      expect(maxJump).toBeGreaterThan(height * 0.15);
+    }
+  });
+
+  it('spreads branches across the map: at least 2 distinct wall clusters show up in some attempt', () => {
+    const width = 300,
+      height = 200;
+    // Wide enough to fold a single branch's own left/right edges (bounded by
+    // its max sideways wander plus its own radius, see
+    // BRANCH_MAX_WANDER_FRACTION_OF_WIDTH in terrain.ts) into one cluster,
+    // but narrower than the gap between two different branches, which
+    // applyBranches keeps in separate 1/count-wide slots across the map.
+    const clusterWindow = width * 0.15;
+    let sawTwoOrMoreClusters = false;
+    for (let attempt = 0; attempt < 40 && !sawTwoOrMoreClusters; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      const jumpXs: number[] = [];
+      let prevHeight = 0;
+      for (let y = 0; y < height; y++) {
+        if (mask[y * width + 0] === 1) {
+          prevHeight = height - y;
+          break;
+        }
+      }
+      for (let x = 1; x < width; x++) {
+        let curHeight = 0;
+        for (let y = 0; y < height; y++) {
+          if (mask[y * width + x] === 1) {
+            curHeight = height - y;
+            break;
+          }
+        }
+        if (Math.abs(curHeight - prevHeight) > height * 0.15) jumpXs.push(x);
+        prevHeight = curHeight;
+      }
+      const clusters: number[] = [];
+      for (const x of jumpXs) {
+        if (clusters.length === 0 || x - clusters[clusters.length - 1] > clusterWindow) clusters.push(x);
+      }
+      if (clusters.length >= 2) sawTwoOrMoreClusters = true;
+    }
+    expect(sawTwoOrMoreClusters).toBe(true);
+  });
+
+  it('never lands a branch cap above the shared top-clearance line', () => {
+    const width = 200,
+      height = 200;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const mask = generateSilhouetteMask(width, height);
+      const clearRows = Math.floor(height * 0.19);
+      for (let i = 0; i < clearRows * width; i++) {
+        expect(mask[i]).toBe(0);
+      }
+    }
+  });
+});
+
 describe('generateSilhouetteMask mountains', () => {
   it('produces a different silhouette on repeated calls (randomized, not fixed)', () => {
     const width = 300,

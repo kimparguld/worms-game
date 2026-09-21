@@ -39,6 +39,24 @@ const MOUNTAIN_OCTAVES = [
   { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 7 },
 ];
 
+const BRANCH_COUNT_MIN = 3;
+const BRANCH_COUNT_MAX = 5;
+const BRANCH_BASE_RADIUS_MIN_FRACTION = 0.025; // fraction of width
+const BRANCH_BASE_RADIUS_MAX_FRACTION = 0.04;
+const BRANCH_TIP_RADIUS_FRACTION = 0.4; // tip radius, as a fraction of the base radius
+// Chosen well above the 0.15 rope-grapple threshold the tests require (see
+// "generateSilhouetteMask branches" in terrain.test.ts) - the same
+// margin-above-the-requirement principle the old cliff-rise constants used,
+// so random variation within this range can never produce a wall too short
+// to grapple.
+const BRANCH_HEIGHT_MIN_FRACTION = 0.28; // fraction of height climbed above the branch's own start point
+const BRANCH_HEIGHT_MAX_FRACTION = 0.42;
+const BRANCH_STEP_FRACTION = 0.35; // vertical step per walk iteration, as a fraction of the *current* radius
+const BRANCH_WANDER_FRACTION = 0.5; // max sideways drift per step, as a fraction of the current radius
+const BRANCH_MAX_WANDER_FRACTION_OF_WIDTH = 0.06; // hard cap on total drift from the branch's own start X
+const BRANCH_CAP_RADIUS_MULTIPLIER = 1.8; // tip cap size, relative to the radius at the tip
+const BRANCH_CAP_SQUASH = 0.85; // same vertical squash floating islands use, for a rounded-chunk cap instead of a perfect circle
+
 // ~38px at 960 width - wide enough to keep a building's edge, not just
 // its center, clear of the spawn column.
 const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
@@ -369,6 +387,166 @@ function pickIslandCenterFraction(halfWidthFraction: number, spawnFractions: num
   return sampleExcludingSpawnColumns(halfWidthFraction, 1 - halfWidthFraction, halfWidthFraction, spawnFractions);
 }
 
+// Topmost solid row in column x of the mask as it stands right now - reads
+// off *any* solid material (ground value 1 or building value 2), since a
+// branch is fine launching from either. Mirrors terrainDecorations.ts's
+// surfaceAt, but only needs the row, not which value it was.
+function surfaceYAt(mask: Uint8Array, width: number, height: number, x: number): number {
+  for (let y = 0; y < height; y++) {
+    if (mask[y * width + x] !== 0) return y;
+  }
+  return height;
+}
+
+// Runs of columns whose current surface is building material (mask value 2),
+// as [lo, hi] fractions of width - a branch should never sprout out of a
+// building's flat roof, since that would read as artificial rather than a
+// natural growth. Mirrors terrainDecorations.ts's computeBadGroundIntervals
+// (same run-collapsing column scan), but keyed on mask===2 specifically
+// rather than "anything that isn't plantable ground" - unlike that function,
+// a branch is fine starting from a lake's shallow edge (see applyBranches),
+// so the two predicates can't be shared.
+function buildingColumnRanges(mask: Uint8Array, width: number, height: number): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let runStart: number | null = null;
+  for (let x = 0; x <= width; x++) {
+    const isBuilding =
+      x < width &&
+      (() => {
+        const y = surfaceYAt(mask, width, height, x);
+        return y < height && mask[y * width + x] === 2;
+      })();
+    if (isBuilding && runStart === null) {
+      runStart = x;
+    } else if (!isBuilding && runStart !== null) {
+      ranges.push([runStart / width, x / width]);
+      runStart = null;
+    }
+  }
+  return ranges;
+}
+
+// Fills every mask cell inside the ellipse centered at (cx, cy) with radii
+// (radiusX, radiusY) - the basic unit applyBranch stamps repeatedly along its
+// walk to build up a tapering tube, and applyFloatingIslands already uses the
+// same squashed-ellipse technique for its lobes.
+function stampCircle(
+  mask: Uint8Array,
+  width: number,
+  cx: number,
+  cy: number,
+  radiusX: number,
+  radiusY: number,
+  topClearanceRow: number,
+  bottomClearanceRow: number,
+): void {
+  const minX = Math.max(0, Math.floor(cx - radiusX));
+  const maxX = Math.min(width - 1, Math.ceil(cx + radiusX));
+  const minY = Math.max(topClearanceRow, Math.floor(cy - radiusY));
+  const maxY = Math.min(bottomClearanceRow, Math.ceil(cy + radiusY));
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      if (((x - cx) / radiusX) ** 2 + ((y - cy) / radiusY) ** 2 <= 1) mask[y * width + x] = 1;
+    }
+  }
+}
+
+// Grows one winding, tapering branch up from startXFraction's own current
+// surface: a constrained random walk that shrinks its radius as it climbs,
+// drifts sideways within a bounded band to create overhangs, and finishes
+// with a wider, squashed landing cap a worm can stand on. Small step size
+// relative to the current radius (BRANCH_STEP_FRACTION) keeps consecutive
+// stamped circles overlapping enough to read as one continuous tube rather
+// than a string of separate blobs.
+function applyBranch(mask: Uint8Array, width: number, height: number, startXFraction: number): void {
+  const topClearanceRow = Math.ceil(height * 0.19) + 2; // same budget every other feature respects
+  const bottomClearanceRow = Math.floor(height * (1 - WATER_BAND_HEIGHT_FRACTION)) - 1;
+  const startX = Math.round(startXFraction * width);
+  let y = surfaceYAt(mask, width, height, startX);
+  const climbHeight = randomBetween(BRANCH_HEIGHT_MIN_FRACTION, BRANCH_HEIGHT_MAX_FRACTION) * height;
+  const topY = Math.max(topClearanceRow, y - climbHeight);
+  const startY = y;
+
+  const baseRadius = randomBetween(BRANCH_BASE_RADIUS_MIN_FRACTION, BRANCH_BASE_RADIUS_MAX_FRACTION) * width;
+  const tipRadius = baseRadius * BRANCH_TIP_RADIUS_FRACTION;
+  const maxWander = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * width;
+
+  let x = startX;
+  let radius = baseRadius;
+  while (y > topY) {
+    stampCircle(mask, width, x, y, radius, radius, topClearanceRow, bottomClearanceRow);
+    const progress = Math.min(1, Math.max(0, (startY - y) / (startY - topY)));
+    radius = baseRadius + (tipRadius - baseRadius) * progress;
+    y -= Math.max(1, radius * BRANCH_STEP_FRACTION);
+    x = Math.min(
+      startX + maxWander,
+      Math.max(startX - maxWander, x + randomBetween(-1, 1) * radius * BRANCH_WANDER_FRACTION),
+    );
+  }
+  // Landing cap: wider and squashed, same technique applyFloatingIslands
+  // uses for its lobes, for a rounded chunk instead of a bare tube end.
+  const capRadius = radius * BRANCH_CAP_RADIUS_MULTIPLIER;
+  stampCircle(mask, width, x, y, capRadius, capRadius * BRANCH_CAP_SQUASH, topClearanceRow, bottomClearanceRow);
+}
+
+// True only if sampleExcludingSpawnColumns would find a safe point without
+// falling through to its 3rd-tier fallback (pointFarthestFromSpawnColumns),
+// which gives no minimum-distance guarantee at all - fine for lakes (soft,
+// sine-blended edges, safe to land close to a spawn column under it) but
+// not for branches (sharp, hard-edged - the whole point of the feature).
+// Mirrors sampleExcludingSpawnColumns's own tier-2 check (spawn columns
+// alone, no extraForbiddenFractions) so this predicts the real call's
+// behavior exactly, not approximately.
+function hasSafeSpawnClearance(
+  rangeMin: number,
+  rangeMax: number,
+  halfWidthFraction: number,
+  spawnFractions: number[],
+): boolean {
+  const spawnForbidden: Array<[number, number]> = spawnFractions.map((spawnFraction) => [
+    spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
+    spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+  ]);
+  return computeAllowedIntervals(rangeMin, rangeMax, spawnForbidden).length > 0;
+}
+
+// Grows BRANCH_COUNT_MIN-MAX branches, each from its own slot of the map's
+// width (the same slot-per-feature pattern pickSpawnFractions uses for
+// worms) so they spread out rather than clumping. halfWidthFraction is the
+// branch's own max wander, used to inset each slot's own [slotMin, slotMax]
+// bounds - widening this would shrink every slot toward zero width at
+// BRANCH_COUNT_MAX, so it stays narrow. Spawn-column safety instead gets its
+// own wider spawnExclusionHalfWidthFraction (wander plus the branch's own
+// worst-case painted radius - the cap's effective radius is smaller than
+// this, so the base radius alone covers both body and cap), passed only to
+// sampleExcludingSpawnColumns so it widens the spawn exclusion zone without
+// touching slot sizing. Lakes are deliberately not excluded (a branch
+// starting near a lake's shallow edge matches the reference art); building
+// roofs are, via buildingColumnRanges, since a branch sprouting out of a
+// flat roof would look artificial.
+function applyBranches(mask: Uint8Array, width: number, height: number, spawnFractions: number[]): void {
+  const count = randomInt(BRANCH_COUNT_MIN, BRANCH_COUNT_MAX);
+  const halfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH;
+  const spawnExclusionHalfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH + BRANCH_BASE_RADIUS_MAX_FRACTION;
+  const slotFraction = 1 / count;
+  const buildingForbidden = buildingColumnRanges(mask, width, height);
+
+  for (let i = 0; i < count; i++) {
+    const slotMin = i * slotFraction + halfWidthFraction;
+    const slotMax = (i + 1) * slotFraction - halfWidthFraction;
+    if (slotMin >= slotMax) continue; // slot too narrow for this map size - skip rather than sample garbage
+    if (!hasSafeSpawnClearance(slotMin, slotMax, spawnExclusionHalfWidthFraction, spawnFractions)) continue;
+    const startXFraction = sampleExcludingSpawnColumns(
+      slotMin,
+      slotMax,
+      spawnExclusionHalfWidthFraction,
+      spawnFractions,
+      buildingForbidden,
+    );
+    applyBranch(mask, width, height, startXFraction);
+  }
+}
+
 // Stamps a small cluster of overlapping circular lobes (an irregular blob,
 // not a perfect disc) directly into the mask as ground material - detached
 // floating chunks read as their own silhouette with no heightmap column of
@@ -464,6 +642,7 @@ export function generateSilhouetteMask(
       }
     }
   }
+  applyBranches(mask, width, height, spawnFractions);
   applyFloatingIslands(mask, width, height, spawnFractions);
   return mask;
 }
