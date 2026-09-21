@@ -1,5 +1,6 @@
 import { WATER_BAND_HEIGHT_FRACTION } from './constants.js';
 import { generateDecorations } from './terrainDecorations.js';
+import { computeAllowedIntervals, sampleFromIntervals } from './intervalSampling.js';
 import type { Terrain } from './types.js';
 
 // The Y coordinate of the water's surface - fixed at the bottom of the map,
@@ -28,16 +29,40 @@ export function waterLevelY(terrain: Terrain): number {
 // highest possible natural ground (0.55), which still leaves 0.17 of headroom
 // - above the 0.15 height jump the tests require for a rope-grabbable wall.
 const MOUNTAIN_BASE_FRACTION = 0.37;
+// minFrequency/maxFrequency count full sine cycles across the whole map
+// width - e.g. the first octave completing 1-2 cycles reads as a couple of
+// broad rolling humps, layered under the second/third octaves' progressively
+// smaller, more frequent bumps, the way stacked noise octaves usually work.
+// (These max values were accidentally dropped to 0 at some point, collapsing
+// every octave toward a near-flat, barely-undulating line and leaving the
+// cliffs/buildings as the only visible relief - hence the "square blocks"
+// look; restored here to the values this was tuned and tested at.)
 const MOUNTAIN_OCTAVES = [
-  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.13, minFrequency: 1, maxFrequency: 0 },
-  { minAmplitudeFraction: 0.03, maxAmplitudeFraction: 0.06, minFrequency: 2, maxFrequency: 0 },
-  { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 0 },
+  { minAmplitudeFraction: 0.07, maxAmplitudeFraction: 0.13, minFrequency: 1, maxFrequency: 2 },
+  { minAmplitudeFraction: 0.03, maxAmplitudeFraction: 0.06, minFrequency: 2, maxFrequency: 4 },
+  { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 7 },
 ];
 
-const CLIFF_WIDTH_FRACTION = 0.013;
-const CLIFF_RISE_MIN_FRACTION = 0.05;
-const CLIFF_RISE_MAX_FRACTION = 0.1;
-const MAX_GROUND_HEIGHT_FRACTION = 1.72;
+// Paired with the rise below: at this width, a 0.2-0.3 rise reads as an
+// actual cliff face with a standable top, wide enough to see as a wall
+// rather than a flagpole. This had also drifted down to 0.013 (~29px at a
+// 2240px map) - 10x narrower - which combined with the tall rise produced a
+// thin vertical spike sticking up out of the mountain instead of a cliff.
+const CLIFF_WIDTH_FRACTION = 0.13;
+// Must clear the 0.15 height-jump the tests require for a rope-grabbable
+// wall even in the worst case (see the height-budget comment above: natural
+// ground can reach 0.55, the ground cap is 0.72, leaving only 0.17 of
+// headroom to clamp into) - these had drifted down to 0.05-0.1, well under
+// that floor, so a cliff could no longer be counted on to produce a wall the
+// rope could actually grapple.
+const CLIFF_RISE_MIN_FRACTION = 0.2;
+const CLIFF_RISE_MAX_FRACTION = 0.3;
+// Matches the "<= 0.72" this file's own height-budget comment documents
+// above - this had drifted to 1.72 (effectively disabling the cap, since
+// boundaryHeight + rise never gets anywhere near 172% of the map height),
+// which let a cliff's raised plateau go arbitrarily high with nothing to
+// stop it.
+const MAX_GROUND_HEIGHT_FRACTION = 0.72;
 
 // ~38px at 960 width - wide enough to keep a cliff/building's edge, not just
 // its center, clear of the spawn column.
@@ -83,77 +108,6 @@ const GROUND_TEXTURE_KEYS = ['terrain_ground', 'terrain_ground_2', 'terrain_grou
 // off the generated Terrain.
 function pickGroundTextureKey(): string {
   return GROUND_TEXTURE_KEYS[randomInt(0, GROUND_TEXTURE_KEYS.length - 1)];
-}
-
-// Deterministically samples a fraction from [rangeMin, rangeMax] that is
-// guaranteed not to place an item of the given half-width anywhere near a
-// spawn column, nor (if given) overlapping any of extraForbiddenFractions -
-// no reroll, no retry budget, no chance of failure.
-//
-// For each spawn column, the forbidden zone is the set of center fractions
-// at which an item of this half-width would come within
-// SPAWN_EXCLUSION_MARGIN_FRACTION of that column:
-// [spawn - halfWidthFraction - margin, spawn + halfWidthFraction + margin].
-// extraForbiddenFractions works the same way but for an already-known [lo,
-// hi] span (e.g. a lake's footprint) rather than a single point - callers
-// pass it pre-widened by their own half-width plus margin. These zones are
-// clipped to the requested range, merged (they can and do overlap for this
-// project's actual spawn fractions - e.g. 0.156 and 0.208 are close enough
-// that their zones merge into one), and then the complement (the allowed
-// sub-intervals) is sampled uniformly by weighting each sub-interval by its
-// length, so the result is uniform over the whole allowed region rather than
-// biased toward whichever interval is checked first.
-// Clips `forbidden` to [rangeMin, rangeMax], sweep-merges overlapping/
-// adjacent intervals, and returns the complement (the allowed sub-intervals)
-// within that range.
-function computeAllowedIntervals(
-  rangeMin: number,
-  rangeMax: number,
-  forbidden: Array<[number, number]>,
-): Array<[number, number]> {
-  const clipped: Array<[number, number]> = [];
-  for (const [rawLo, rawHi] of forbidden) {
-    const lo = Math.max(rangeMin, rawLo);
-    const hi = Math.min(rangeMax, rawHi);
-    if (lo < hi) clipped.push([lo, hi]);
-  }
-  clipped.sort((a, b) => a[0] - b[0]);
-
-  const merged: Array<[number, number]> = [];
-  for (const [lo, hi] of clipped) {
-    const last = merged[merged.length - 1];
-    if (last && lo <= last[1]) {
-      last[1] = Math.max(last[1], hi);
-    } else {
-      merged.push([lo, hi]);
-    }
-  }
-
-  const allowed: Array<[number, number]> = [];
-  let cursor = rangeMin;
-  for (const [lo, hi] of merged) {
-    if (lo > cursor) allowed.push([cursor, lo]);
-    cursor = Math.max(cursor, hi);
-  }
-  if (cursor < rangeMax) allowed.push([cursor, rangeMax]);
-  return allowed;
-}
-
-// Samples uniformly from a set of allowed sub-intervals, weighting each by
-// its length so the result is uniform over the whole allowed region rather
-// than biased toward whichever interval is checked first. Returns null if
-// the intervals cover no length at all, rather than throwing.
-function sampleFromIntervals(intervals: Array<[number, number]>): number | null {
-  const totalLength = intervals.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
-  if (totalLength <= 0) return null;
-  let offset = Math.random() * totalLength;
-  for (const [lo, hi] of intervals) {
-    const len = hi - lo;
-    if (offset < len) return lo + offset;
-    offset -= len;
-  }
-  // Floating-point edge case: offset landed exactly on the total length.
-  return intervals[intervals.length - 1][1];
 }
 
 // Deterministically samples a fraction from [rangeMin, rangeMax] that is
@@ -293,6 +247,29 @@ function computeMountainHeights(width: number, height: number): Float64Array {
   return heights;
 }
 
+// How much of the plateau's own half-width, right past its untouched wall
+// columns (see WALL_CORE_WIDTH below), eases from the full raised height
+// down toward CLIFF_CORNER_ROUND_DEPTH_FRACTION of the rise - this is what
+// turns a flat-topped rectangle into a rounded-shoulder mesa. Depth is a
+// fraction of the *rise*, not of height, so it scales with however tall
+// this particular cliff happened to roll.
+const CLIFF_CORNER_ROUND_FRACTION = 0.4;
+const CLIFF_CORNER_ROUND_DEPTH_FRACTION = 0.5;
+// Small per-column noise added across the rounded portion of the top, on top
+// of the corner curve, so it reads as an uneven rock surface rather than a
+// mathematically smooth curve. An order of magnitude below
+// MAX_NATURAL_ADJACENT_SLOPE_FRACTION (terrainDecorations.ts) so it never
+// reads as its own cliff edge to the decoration placer.
+const CLIFF_SURFACE_JITTER_FRACTION = 0.01;
+// Columns closest to each wall boundary that are left at exactly
+// `raisedHeight`, untouched by rounding/jitter - this is deliberately the
+// only part of the plateau this function guarantees the shape of, because
+// it's what the height-budget's near-vertical-wall guarantee (see the
+// module comment) and this file's own tests measure: the jump from
+// leftBoundaryX/rightBoundaryX into these columns. Everything else in the
+// plateau is free to be reshaped without touching that guarantee.
+const CLIFF_WALL_CORE_WIDTH = 2;
+
 // Carves a near-vertical wall face into the mountain so the ninja rope has
 // something to grapple onto - a smooth sine silhouette alone has no
 // vertical surfaces anywhere. The rise is computed relative to the actual
@@ -300,6 +277,11 @@ function computeMountainHeights(width: number, height: number): Float64Array {
 // center point), so the resulting jump at the cliff's edge is guaranteed to
 // be at least `riseFraction * height`, regardless of how the mountain
 // happens to slope through that span.
+//
+// Past that guaranteed wall (see CLIFF_WALL_CORE_WIDTH), the rest of the
+// plateau's top eases down and gets a little surface noise instead of
+// staying a perfectly flat rectangle - a flat-topped block with two square
+// top corners reads as an obviously artificial slab, not a rock formation.
 function applyCliff(heights: Float64Array, width: number, height: number, centerFraction: number): void {
   const centerX = Math.round(width * centerFraction);
   const halfWidth = Math.max(1, Math.round((width * CLIFF_WIDTH_FRACTION) / 2));
@@ -310,7 +292,42 @@ function applyCliff(heights: Float64Array, width: number, height: number, center
   const boundaryHeight = Math.max(heights[leftBoundaryX], heights[rightBoundaryX]);
   const riseFraction = randomBetween(CLIFF_RISE_MIN_FRACTION, CLIFF_RISE_MAX_FRACTION);
   const raisedHeight = Math.min(height * MAX_GROUND_HEIGHT_FRACTION, boundaryHeight + height * riseFraction);
-  for (let x = minX; x <= maxX; x++) heights[x] = raisedHeight;
+  const rise = raisedHeight - boundaryHeight;
+
+  const span = maxX - minX;
+  const wallCoreWidth = Math.min(CLIFF_WALL_CORE_WIDTH, Math.floor(span / 2));
+  const cornerRadius = Math.max(1, Math.round(span * CLIFF_CORNER_ROUND_FRACTION));
+
+  // Raw per-column noise, smoothed with a small moving average below (see
+  // the loop) - independent random noise per column is too high-frequency
+  // to read as anything but static; smoothing it turns the rounded top into
+  // a bumpy rock surface instead.
+  const rawJitter = new Float64Array(span + 1);
+  for (let i = 0; i <= span; i++) {
+    rawJitter[i] = (Math.random() - 0.5) * 2 * height * CLIFF_SURFACE_JITTER_FRACTION;
+  }
+  const smoothRadius = Math.max(1, Math.round(span * 0.02));
+
+  for (let x = minX; x <= maxX; x++) {
+    const distFromNearestEdge = Math.min(x - minX, maxX - x);
+    if (distFromNearestEdge < wallCoreWidth) {
+      heights[x] = raisedHeight;
+      continue;
+    }
+    const cornerT = Math.min(1, (distFromNearestEdge - wallCoreWidth) / cornerRadius);
+    const dip = rise * CLIFF_CORNER_ROUND_DEPTH_FRACTION * Math.sin((cornerT * Math.PI) / 2);
+
+    let jitterSum = 0;
+    let jitterCount = 0;
+    for (let k = -smoothRadius; k <= smoothRadius; k++) {
+      const j = x - minX + k;
+      if (j >= 0 && j <= span) {
+        jitterSum += rawJitter[j];
+        jitterCount++;
+      }
+    }
+    heights[x] = raisedHeight - dip + jitterSum / jitterCount;
+  }
 }
 
 // Deterministically samples a cliff's centerFraction from [min, max] such

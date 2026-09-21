@@ -1,4 +1,5 @@
 import { WORLD_WIDTH } from './constants.js';
+import { computeAllowedIntervals, sampleFromIntervals } from './intervalSampling.js';
 import type { TerrainDecoration } from './types.js';
 
 // Native pixel size of each cropped prop sprite (see public/assets/terrain/props
@@ -369,10 +370,10 @@ interface DecorationCategory {
 }
 
 const CATEGORIES: DecorationCategory[] = [
-  { props: ROCK_PROPS, countRange: [6, 11], heightRange: [32, 95], flippable: true },
-  { props: TREE_PROPS, countRange: [4, 7], heightRange: [85, 165], flippable: true },
-  { props: BUSH_PROPS, countRange: [7, 13], heightRange: [26, 52], flippable: true },
-  { props: FLOWER_PROPS, countRange: [10, 16], heightRange: [16, 30], flippable: false },
+  { props: ROCK_PROPS, countRange: [9, 15], heightRange: [32, 95], flippable: true },
+  { props: TREE_PROPS, countRange: [6, 10], heightRange: [85, 165], flippable: true },
+  { props: BUSH_PROPS, countRange: [10, 18], heightRange: [26, 52], flippable: true },
+  { props: FLOWER_PROPS, countRange: [14, 22], heightRange: [16, 30], flippable: false },
 ];
 
 const BASELINE_WORLD_WIDTH = WORLD_WIDTH;
@@ -385,12 +386,26 @@ const SPAWN_CLEARANCE_MARGIN_PX = 24;
 // nothing appears to be growing out of a pond.
 const LOW_GROUND_FRACTION = 0.85;
 // Minimum gap kept between any two decorations' anchor columns (regardless
-// of category). Now that each one stamps solid ground under itself (see
-// stampFootprint), this is wide enough that two full-size instances can't
-// fully merge into one indistinguishable mound, while still letting a
-// cluster's outer edges touch and read as a intentional grove/pile.
-const MIN_GAP_PX = 20;
-const MAX_PLACEMENT_ATTEMPTS = 24;
+// of category). Individual footprints are usually far wider than this (a
+// tree/rock can be 100+ px across) so neighbors already overlap well past
+// this gap - it just stops two anchors from landing on literally the same
+// spot. Lowered from 20: with a limited amount of legal ground once
+// buildings/lakes/spawn columns are excluded (see allowedX below), a wider
+// gap meant the map's ground filled up (every remaining spot within
+// MIN_GAP_PX of something already placed) well before the requested
+// rock/tree/bush/flower counts were reached, silently capping density
+// regardless of how those counts were tuned or how many placement attempts
+// were allowed.
+const MIN_GAP_PX = 12;
+// Sampling x straight from the spawn-excluded intervals (see allowedX below)
+// means every attempt at least starts clear of the one biggest rejection
+// reason; what's left to retry against - another decoration's MIN_GAP_PX,
+// a building/cliff/lake edge crossing the footprint (see
+// footprintSpanIsUniformGround) - rejects more often for later categories,
+// once earlier ones have filled up more of the map. Raised well past the
+// old value of 24 so those later categories (bushes, flowers) don't run out
+// of tries and quietly end up sparser than they were asked to be.
+const MAX_PLACEMENT_ATTEMPTS = 60;
 // Never stamp solid ground above this fraction of the world's height - the
 // same top-clearance budget every other terrain feature respects (see
 // terrain.ts's height-budget comment), so a tall tree landing on top of an
@@ -426,6 +441,103 @@ function surfaceAt(mask: Uint8Array, width: number, height: number, x: number): 
     if (value !== 0) return { y, value };
   }
   return { y: height, value: 0 };
+}
+
+// A jump between adjacent columns' surface heights this large can only be a
+// cliff face or a building's edge (both guaranteed to jump by far more than
+// this - see terrain.ts's CLIFF_RISE/BUILDING_RISE fractions and the
+// "natural slope" comment in terrain.test.ts), never the mountain's own
+// smooth sine-wave silhouette, which shifts by at most a couple of px
+// between neighbors no matter how steep it looks zoomed out.
+const MAX_NATURAL_ADJACENT_SLOPE_FRACTION = 0.05;
+
+// Runs of columns that can never host a decoration's *anchor* - a building
+// roof, open sky, or a lake basin (see isFreeColumn's per-column checks,
+// which this mirrors) - collapsed into [startX, endX) spans. Buildings alone
+// can cover a large chunk of a map's width (up to 4 of them, each up to 11%
+// - see terrain.ts's BUILDING_COUNT/WIDTH constants), so folding this into
+// the same allowed-interval sampling used for spawn columns (see allowedX
+// below) means most attempts land on genuinely plantable ground from the
+// start, instead of spending the retry budget on columns that were always
+// going to fail the anchor check.
+function computeBadGroundIntervals(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  lowGroundY: number,
+): Array<[number, number]> {
+  const bad: Array<[number, number]> = [];
+  let runStart: number | null = null;
+  for (let x = 0; x <= width; x++) {
+    const isBad = x < width && (() => {
+      const { y, value } = surfaceAt(mask, width, height, x);
+      return value !== 1 || y >= lowGroundY;
+    })();
+    if (isBad && runStart === null) {
+      runStart = x;
+    } else if (!isBad && runStart !== null) {
+      bad.push([runStart, x]);
+      runStart = null;
+    }
+  }
+  return bad;
+}
+
+// Even where no single adjacent-column step is a "jump" (see
+// MAX_NATURAL_ADJACENT_SLOPE_FRACTION above), a long enough run of gentle
+// steps in the same direction - a real slope, not a discontinuity - still
+// adds up to more total rise/fall across a footprint than the art can
+// follow. The art is one flat bitmap drawn once at the anchor's own y (see
+// the TerrainRenderer constructor); the collision correctly hugs each
+// column's own local ground (see stampFootprint). On steep-but-continuous
+// ground those two drift apart the further a column sits from the anchor,
+// so a decoration stood on a real slope has its canopy silently masked out
+// wherever the local ground has moved too far from the anchor's own height -
+// visually identical to the straddling-a-cliff-edge clip this same function
+// already rejects, just from smooth terrain instead of a sharp edge.
+// Expressed as a fraction of the decoration's own rendered height (not a
+// flat pixel budget) so a tall tree and a short flower get proportionally
+// the same tolerance for how far the ground can drift under them.
+const MAX_SURFACE_RANGE_FRACTION_OF_HEIGHT = 0.15;
+
+// True only if every column across [minX, maxX] is plain ground (mask value
+// 1, not a building roof or open sky), stays above the lake-basin line,
+// never jumps to a neighboring column by more than a natural slope can, and
+// never drifts in total by more than a small fraction of the decoration's
+// own height - see stampFootprint, which stamps a decoration's collision by
+// combining a single anchor-relative height profile with each column's
+// *own* surface Y. That combination silently assumes the whole footprint
+// sits on one contiguous, close-to-flat patch of ground: previously only
+// the anchor column itself was checked, so a decoration whose footprint
+// happened to straddle a building edge, a cliff face, a lake basin, or just
+// a steep natural slope got its collision (and therefore its visible,
+// mask-clipped art) stamped against each column's true - very different -
+// local surface, cutting most of the sprite away and leaving only a sliver
+// visible.
+function footprintSpanIsUniformGround(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  minX: number,
+  maxX: number,
+  lowGroundY: number,
+  footprintHeight: number,
+): boolean {
+  const maxAdjacentJump = height * MAX_NATURAL_ADJACENT_SLOPE_FRACTION;
+  const maxSurfaceRange = footprintHeight * MAX_SURFACE_RANGE_FRACTION_OF_HEIGHT;
+  let prevY: number | null = null;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let x = minX; x <= maxX; x++) {
+    const { y, value } = surfaceAt(mask, width, height, x);
+    if (value !== 1) return false;
+    if (y >= lowGroundY) return false;
+    if (prevY !== null && Math.abs(y - prevY) > maxAdjacentJump) return false;
+    prevY = y;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return maxY - minY <= maxSurfaceRange;
 }
 
 // Reads a height-fraction profile at an arbitrary fractional position across
@@ -486,12 +598,24 @@ function stampFootprint(
   // side for profileHeightAt's zero-taper ramp - see
   // FOOTPRINT_EDGE_PADDING_FRACTION.
   const paddedHalfWidth = footprintWidth / 2 / (1 - 2 * FOOTPRINT_EDGE_PADDING_FRACTION);
-  const minX = Math.max(0, Math.floor(anchorX - paddedHalfWidth));
-  const maxX = Math.min(width - 1, Math.ceil(anchorX + paddedHalfWidth));
+  // The *true* (possibly off-map) span - positionFraction below is always
+  // measured against this, not the clamped [minX, maxX] loop bounds. A
+  // decoration anchored near x=0 or x=width has part of its padded span
+  // fall off the map; clamping minX/maxX is only about which columns
+  // physically exist to stamp into. Rescaling positionFraction to the
+  // *clamped* span instead (as this used to) would stretch the profile to
+  // fill just the on-map remainder, silently sampling the wrong part of it -
+  // for a flipped sprite this could land exactly on the profile's zero-
+  // height taper right at the visible edge, stamping no collision there at
+  // all and leaving nothing but a sliver of art poking out of the ground.
+  const trueMinX = anchorX - paddedHalfWidth;
+  const trueMaxX = anchorX + paddedHalfWidth;
+  const minX = Math.max(0, Math.floor(trueMinX));
+  const maxX = Math.min(width - 1, Math.ceil(trueMaxX));
   const topClearanceRow = Math.ceil(height * TOP_CLEARANCE_FRACTION) + 1;
 
   for (let x = minX; x <= maxX; x++) {
-    const positionFraction = (x - minX) / Math.max(1, maxX - minX);
+    const positionFraction = (x - trueMinX) / Math.max(1, trueMaxX - trueMinX);
     const localHeight = footprintHeight * profileHeightAt(profile, positionFraction, flipX);
     if (localHeight <= 0) continue;
     const { y: surfaceY, value } = surfaceAt(mask, width, height, x);
@@ -543,24 +667,38 @@ export function generateDecorations(
   decorationMask: Uint8Array,
   spawnFractions: number[],
 ): TerrainDecoration[] {
-  const spawnColumnsPx = spawnFractions.map((f) => f * width);
   const lowGroundY = height * LOW_GROUND_FRACTION;
   const sizeScale = width / BASELINE_WORLD_WIDTH;
   const spawnClearancePx = maxFootprintHalfWidth(sizeScale) + SPAWN_CLEARANCE_MARGIN_PX * sizeScale;
+  // Precomputed once: every x this map's spawn columns rule out, at the
+  // widest possible footprint half-width any category could need. Sampling
+  // straight from this (rather than picking a uniformly random x across the
+  // *whole* width and rejecting the ones that land too close to a spawn
+  // column - as this used to) matters here specifically because the
+  // excluded zones are wide relative to the map: with 4 spawn columns each
+  // carving out a wide margin, a uniform draw could spend most of
+  // MAX_PLACEMENT_ATTEMPTS retries on x's that were always going to fail
+  // this one check, starving later categories (whose occupiedX gap check
+  // has more to compete with) of the attempts they need.
+  const spawnForbidden: Array<[number, number]> = spawnFractions.map((f) => {
+    const spawnX = f * width;
+    return [spawnX - spawnClearancePx, spawnX + spawnClearancePx];
+  });
+  // Folds in every building/lake/sky column too (see
+  // computeBadGroundIntervals) - between this and spawnForbidden, a sampled
+  // x's *anchor* is already guaranteed plantable ground; only the gap check
+  // (against other decorations) and the footprint-span check (against a
+  // building/cliff/lake edge just outside the anchor) can still reject it.
+  const badGround = computeBadGroundIntervals(mask, width, height, lowGroundY);
+  const allowedX = computeAllowedIntervals(0, width, [...spawnForbidden, ...badGround]);
   const occupiedX: number[] = [];
 
   const isFreeColumn = (x: number): { y: number } | null => {
-    for (const spawnX of spawnColumnsPx) {
-      if (Math.abs(x - spawnX) < spawnClearancePx) return null;
-    }
     for (const placedX of occupiedX) {
       if (Math.abs(x - placedX) < MIN_GAP_PX) return null;
     }
     const xi = Math.max(0, Math.min(width - 1, Math.round(x)));
-    const { y, value } = surfaceAt(mask, width, height, xi);
-    if (value !== 1) return null; // building roofs stay clear of scenery
-    if (y >= lowGroundY) return null; // lake basin
-    return { y };
+    return { y: surfaceAt(mask, width, height, xi).y };
   };
 
   const decorations: TerrainDecoration[] = [];
@@ -569,12 +707,23 @@ export function generateDecorations(
     for (let i = 0; i < count; i++) {
       let placed = false;
       for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS && !placed; attempt++) {
-        const x = randomBetween(0, width);
+        const x = sampleFromIntervals(allowedX);
+        if (x === null) break; // spawn columns and bad ground alone already cover the whole map
         const free = isFreeColumn(x);
         if (!free) continue;
         const prop = category.props[randomInt(0, category.props.length - 1)];
         const targetHeight = randomBetween(...category.heightRange) * sizeScale;
         const scale = targetHeight / prop.height;
+        const footprintWidth = prop.width * scale;
+        // Same widened bounds stampFootprint itself will stamp into (see
+        // FOOTPRINT_EDGE_PADDING_FRACTION) - checked here, before
+        // committing to this placement, so a footprint that would straddle
+        // a building/cliff/lake edge gets rejected and retried instead of
+        // silently rendering a clipped sprite.
+        const paddedHalfWidth = footprintWidth / 2 / (1 - 2 * FOOTPRINT_EDGE_PADDING_FRACTION);
+        const minX = Math.max(0, Math.floor(x - paddedHalfWidth));
+        const maxX = Math.min(width - 1, Math.ceil(x + paddedHalfWidth));
+        if (!footprintSpanIsUniformGround(mask, width, height, minX, maxX, lowGroundY, targetHeight)) continue;
         const flipX = category.flippable && Math.random() < 0.5;
         decorations.push({
           textureKey: prop.key,
@@ -589,7 +738,7 @@ export function generateDecorations(
           width,
           height,
           x,
-          prop.width * scale,
+          footprintWidth,
           targetHeight,
           HEIGHT_PROFILES[prop.key],
           flipX,
