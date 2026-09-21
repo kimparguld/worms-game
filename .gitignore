@@ -3,5 +3,6 @@ dist/
 .cert/
 .env.local
 .worktrees/
+.superpowers/
 __pycache__/
 **/.DS_Store
