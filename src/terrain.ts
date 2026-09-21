@@ -15,19 +15,15 @@ export function waterLevelY(terrain: Terrain): number {
 // instead of one fixed hill.
 //
 // The height budget below is deliberately conservative so that nothing the
-// generator builds ever reaches the top of the screen: a cliff or building
+// generator builds ever reaches the top of the screen: a branch or building
 // that runs off the top edge looks broken, and a worm spawned on top of one
 // ends up behind the HUD (or clipped away entirely). The budget is:
 //
 //   natural ground  <= BASE + sum(max amplitudes) = 0.37 + 0.18 = 0.55
-//   ground (cliffs) <= MAX_GROUND_HEIGHT_FRACTION            = 0.72
 //   building roofs  <= MAX_BUILDING_ROOF_FRACTION            = 0.80
 //
 // which leaves the top 20% of the screen clear for the HUD and life bars.
-// The cliff rise range is also chosen so that clamping to the ground cap can
-// never eat the whole visible wall: the worst case is a cliff sitting on the
-// highest possible natural ground (0.55), which still leaves 0.17 of headroom
-// - above the 0.15 height jump the tests require for a rope-grabbable wall.
+// See applyBranch below for how branches stay inside this same budget.
 const MOUNTAIN_BASE_FRACTION = 0.37;
 // minFrequency/maxFrequency count full sine cycles across the whole map
 // width - e.g. the first octave completing 1-2 cycles reads as a couple of
@@ -43,28 +39,7 @@ const MOUNTAIN_OCTAVES = [
   { minAmplitudeFraction: 0.015, maxAmplitudeFraction: 0.03, minFrequency: 4, maxFrequency: 7 },
 ];
 
-// Paired with the rise below: at this width, a 0.2-0.3 rise reads as an
-// actual cliff face with a standable top, wide enough to see as a wall
-// rather than a flagpole. This had also drifted down to 0.013 (~29px at a
-// 2240px map) - 10x narrower - which combined with the tall rise produced a
-// thin vertical spike sticking up out of the mountain instead of a cliff.
-const CLIFF_WIDTH_FRACTION = 0.13;
-// Must clear the 0.15 height-jump the tests require for a rope-grabbable
-// wall even in the worst case (see the height-budget comment above: natural
-// ground can reach 0.55, the ground cap is 0.72, leaving only 0.17 of
-// headroom to clamp into) - these had drifted down to 0.05-0.1, well under
-// that floor, so a cliff could no longer be counted on to produce a wall the
-// rope could actually grapple.
-const CLIFF_RISE_MIN_FRACTION = 0.2;
-const CLIFF_RISE_MAX_FRACTION = 0.3;
-// Matches the "<= 0.72" this file's own height-budget comment documents
-// above - this had drifted to 1.72 (effectively disabling the cap, since
-// boundaryHeight + rise never gets anywhere near 172% of the map height),
-// which let a cliff's raised plateau go arbitrarily high with nothing to
-// stop it.
-const MAX_GROUND_HEIGHT_FRACTION = 0.72;
-
-// ~38px at 960 width - wide enough to keep a cliff/building's edge, not just
+// ~38px at 960 width - wide enough to keep a building's edge, not just
 // its center, clear of the spawn column.
 const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
 const SPAWN_COUNT = 4;
@@ -247,103 +222,6 @@ function computeMountainHeights(width: number, height: number): Float64Array {
   return heights;
 }
 
-// How much of the plateau's own half-width, right past its untouched wall
-// columns (see WALL_CORE_WIDTH below), eases from the full raised height
-// down toward CLIFF_CORNER_ROUND_DEPTH_FRACTION of the rise - this is what
-// turns a flat-topped rectangle into a rounded-shoulder mesa. Depth is a
-// fraction of the *rise*, not of height, so it scales with however tall
-// this particular cliff happened to roll.
-const CLIFF_CORNER_ROUND_FRACTION = 0.4;
-const CLIFF_CORNER_ROUND_DEPTH_FRACTION = 0.5;
-// Small per-column noise added across the rounded portion of the top, on top
-// of the corner curve, so it reads as an uneven rock surface rather than a
-// mathematically smooth curve. An order of magnitude below
-// MAX_NATURAL_ADJACENT_SLOPE_FRACTION (terrainDecorations.ts) so it never
-// reads as its own cliff edge to the decoration placer.
-const CLIFF_SURFACE_JITTER_FRACTION = 0.01;
-// Columns closest to each wall boundary that are left at exactly
-// `raisedHeight`, untouched by rounding/jitter - this is deliberately the
-// only part of the plateau this function guarantees the shape of, because
-// it's what the height-budget's near-vertical-wall guarantee (see the
-// module comment) and this file's own tests measure: the jump from
-// leftBoundaryX/rightBoundaryX into these columns. Everything else in the
-// plateau is free to be reshaped without touching that guarantee.
-const CLIFF_WALL_CORE_WIDTH = 2;
-
-// Carves a near-vertical wall face into the mountain so the ninja rope has
-// something to grapple onto - a smooth sine silhouette alone has no
-// vertical surfaces anywhere. The rise is computed relative to the actual
-// natural height just outside the cliff's own span (not the cliff's own
-// center point), so the resulting jump at the cliff's edge is guaranteed to
-// be at least `riseFraction * height`, regardless of how the mountain
-// happens to slope through that span.
-//
-// Past that guaranteed wall (see CLIFF_WALL_CORE_WIDTH), the rest of the
-// plateau's top eases down and gets a little surface noise instead of
-// staying a perfectly flat rectangle - a flat-topped block with two square
-// top corners reads as an obviously artificial slab, not a rock formation.
-function applyCliff(heights: Float64Array, width: number, height: number, centerFraction: number): void {
-  const centerX = Math.round(width * centerFraction);
-  const halfWidth = Math.max(1, Math.round((width * CLIFF_WIDTH_FRACTION) / 2));
-  const minX = Math.max(0, centerX - halfWidth);
-  const maxX = Math.min(width - 1, centerX + halfWidth);
-  const leftBoundaryX = Math.max(0, minX - 1);
-  const rightBoundaryX = Math.min(width - 1, maxX + 1);
-  const boundaryHeight = Math.max(heights[leftBoundaryX], heights[rightBoundaryX]);
-  const riseFraction = randomBetween(CLIFF_RISE_MIN_FRACTION, CLIFF_RISE_MAX_FRACTION);
-  const raisedHeight = Math.min(height * MAX_GROUND_HEIGHT_FRACTION, boundaryHeight + height * riseFraction);
-  const rise = raisedHeight - boundaryHeight;
-
-  const span = maxX - minX;
-  const wallCoreWidth = Math.min(CLIFF_WALL_CORE_WIDTH, Math.floor(span / 2));
-  const cornerRadius = Math.max(1, Math.round(span * CLIFF_CORNER_ROUND_FRACTION));
-
-  // Raw per-column noise, smoothed with a small moving average below (see
-  // the loop) - independent random noise per column is too high-frequency
-  // to read as anything but static; smoothing it turns the rounded top into
-  // a bumpy rock surface instead.
-  const rawJitter = new Float64Array(span + 1);
-  for (let i = 0; i <= span; i++) {
-    rawJitter[i] = (Math.random() - 0.5) * 2 * height * CLIFF_SURFACE_JITTER_FRACTION;
-  }
-  const smoothRadius = Math.max(1, Math.round(span * 0.02));
-
-  for (let x = minX; x <= maxX; x++) {
-    const distFromNearestEdge = Math.min(x - minX, maxX - x);
-    if (distFromNearestEdge < wallCoreWidth) {
-      heights[x] = raisedHeight;
-      continue;
-    }
-    const cornerT = Math.min(1, (distFromNearestEdge - wallCoreWidth) / cornerRadius);
-    const dip = rise * CLIFF_CORNER_ROUND_DEPTH_FRACTION * Math.sin((cornerT * Math.PI) / 2);
-
-    let jitterSum = 0;
-    let jitterCount = 0;
-    for (let k = -smoothRadius; k <= smoothRadius; k++) {
-      const j = x - minX + k;
-      if (j >= 0 && j <= span) {
-        jitterSum += rawJitter[j];
-        jitterCount++;
-      }
-    }
-    heights[x] = raisedHeight - dip + jitterSum / jitterCount;
-  }
-}
-
-// Deterministically samples a cliff's centerFraction from [min, max] such
-// that its footprint (including the spawn margin) never overlaps a known
-// spawn column - see sampleExcludingSpawnColumns.
-function pickCliffCenterFraction(min: number, max: number, spawnFractions: number[]): number {
-  return sampleExcludingSpawnColumns(min, max, CLIFF_WIDTH_FRACTION / 2, spawnFractions);
-}
-
-function applyCliffs(heights: Float64Array, width: number, height: number, spawnFractions: number[]): void {
-  // Two disjoint fraction ranges so a second cliff can never overlap the
-  // first and corrupt its boundary-height reference.
-  applyCliff(heights, width, height, pickCliffCenterFraction(0.15, 0.45, spawnFractions));
-  applyCliff(heights, width, height, pickCliffCenterFraction(0.55, 0.85, spawnFractions));
-}
-
 const LAKE_COUNT_MIN = 2;
 const LAKE_COUNT_MAX = 3;
 const LAKE_WIDTH_MIN_FRACTION = 0.05;
@@ -395,13 +273,7 @@ function computeGroundHeights(
   spawnFractions: number[],
 ): { heights: Float64Array; lakeRanges: Array<[number, number]> } {
   const heights = computeMountainHeights(width, height);
-  // Lakes before cliffs: applyCliff always overwrites its own span with a
-  // plateau raised by a fixed fraction above its (possibly lake-lowered)
-  // boundary, so the cliff's wall-face jump is preserved regardless of a
-  // lake landing nearby - reversed, a lake applied after could soften or
-  // erase the cliff's face entirely.
   const lakeRanges = applyLakes(heights, width, height, spawnFractions);
-  applyCliffs(heights, width, height, spawnFractions);
   return { heights, lakeRanges };
 }
 

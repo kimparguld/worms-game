@@ -30,37 +30,6 @@ describe('generateSilhouetteMask', () => {
   });
 });
 
-describe('generateSilhouetteMask cliffs', () => {
-  // Repeated because the cliff rise is randomized and then clamped to the
-  // ground-height cap: this asserts the clamp can never eat the whole rise.
-  it('carves at least one near-vertical wall face for the ninja rope to grapple', () => {
-    const width = 200,
-      height = 200;
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const mask = generateSilhouetteMask(width, height);
-      let maxJump = 0;
-      for (let x = 1; x < width; x++) {
-        let prevHeight = 0;
-        for (let y = 0; y < height; y++) {
-          if (mask[y * width + (x - 1)] === 1) {
-            prevHeight = height - y;
-            break;
-          }
-        }
-        let curHeight = 0;
-        for (let y = 0; y < height; y++) {
-          if (mask[y * width + x] === 1) {
-            curHeight = height - y;
-            break;
-          }
-        }
-        maxJump = Math.max(maxJump, Math.abs(curHeight - prevHeight));
-      }
-      expect(maxJump).toBeGreaterThan(height * 0.15);
-    }
-  });
-});
-
 describe('generateSilhouetteMask mountains', () => {
   it('produces a different silhouette on repeated calls (randomized, not fixed)', () => {
     const width = 300,
@@ -278,44 +247,6 @@ describe('findSurfaceY', () => {
     }
     expect(findSurfaceY(terrain, 5)).toBe(0); // default: topmost surface in the column
     expect(findSurfaceY(terrain, 5, 12)).toBe(25); // starting inside the tunnel: its own floor, not the roof above
-  });
-});
-
-describe('generateSilhouetteMask always has two cliffs', () => {
-  it('carves two separated near-vertical wall faces, not just one', () => {
-    const width = 200,
-      height = 200;
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const mask = generateSilhouetteMask(width, height);
-      const jumps: number[] = [];
-      let prevHeight = 0;
-      for (let y = 0; y < height; y++) {
-        if (mask[y * width + 0] === 1) {
-          prevHeight = height - y;
-          break;
-        }
-      }
-      for (let x = 1; x < width; x++) {
-        let curHeight = 0;
-        for (let y = 0; y < height; y++) {
-          if (mask[y * width + x] === 1) {
-            curHeight = height - y;
-            break;
-          }
-        }
-        if (Math.abs(curHeight - prevHeight) > height * 0.15) jumps.push(x);
-        prevHeight = curHeight;
-      }
-      // The two cliffs are sampled from disjoint fraction ranges (0.15-0.45
-      // and 0.55-0.85), fully on either side of the map's midpoint, so a
-      // jump found in each half confirms two distinct walls rather than one
-      // wall's two edges (which sit only CLIFF_WIDTH_FRACTION apart, well
-      // within one half).
-      const leftHalfJump = jumps.some((x) => x < width * 0.5);
-      const rightHalfJump = jumps.some((x) => x >= width * 0.5);
-      expect(leftHalfJump).toBe(true);
-      expect(rightHalfJump).toBe(true);
-    }
   });
 });
 
