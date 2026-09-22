@@ -1,4 +1,4 @@
-import { WATER_BAND_HEIGHT_FRACTION } from './constants.js';
+import { WATER_BAND_HEIGHT_FRACTION, MIN_TEAMS, WORMS_PER_TEAM } from './constants.js';
 import { generateDecorations } from './terrainDecorations.js';
 import { computeAllowedIntervals, sampleFromIntervals, TOP_CLEARANCE_FRACTION } from './intervalSampling.js';
 import type { Terrain } from './types.js';
@@ -60,11 +60,26 @@ const BRANCH_CAP_SQUASH = 0.85; // same vertical squash floating islands use, fo
 // ~38px at 960 width - wide enough to keep a building's edge, not just
 // its center, clear of the spawn column.
 const SPAWN_EXCLUSION_MARGIN_FRACTION = 0.04;
-const SPAWN_COUNT = 4;
+// With 3-4 teams (9-12 worms) the spawn columns sit so close together that
+// the full margin, plus a feature's own half-width, blankets the whole map -
+// every lake then falls back to the map's edges (see
+// sampleExcludingSpawnColumns) and the middle of the map loses its water.
+// So the margin shrinks to this fraction of the per-worm slot width once
+// that's the tighter bound; the full 0.04 still applies up to 6 worms.
+const SPAWN_EXCLUSION_MARGIN_SLOT_RATIO = 0.3;
+
+function spawnExclusionMargin(spawnCount: number): number {
+  if (spawnCount === 0) return SPAWN_EXCLUSION_MARGIN_FRACTION;
+  const slotFraction = (1 - SPAWN_MARGIN_FRACTION * 2) / spawnCount;
+  return Math.min(SPAWN_EXCLUSION_MARGIN_FRACTION, slotFraction * SPAWN_EXCLUSION_MARGIN_SLOT_RATIO);
+}
+// One spawn column per worm; createTerrain defaults to the smallest match
+// (MIN_TEAMS full teams) when not told otherwise.
+const DEFAULT_SPAWN_COUNT = MIN_TEAMS * WORMS_PER_TEAM;
 // Keeps every worm well clear of the map's left/right edges.
 const SPAWN_MARGIN_FRACTION = 0.08;
 
-// Picks 4 worm spawn X columns, expressed as fractions of the game's width
+// Picks one worm spawn X column per worm, expressed as fractions of the game's width
 // so this works at any resolution - createMatchRuntime in matchLoop.ts reads
 // these back off the generated Terrain (see createTerrain) to place worms at
 // exactly these columns, so the two always agree. Branches, buildings,
@@ -72,18 +87,18 @@ const SPAWN_MARGIN_FRACTION = 0.08;
 // margin) so a worm can never spawn walled in by a branch, on top of/
 // squeezed against a building, or dropped in a lake.
 //
-// The usable width is split into SPAWN_COUNT equal slots and one column is
+// The usable width is split into `count` equal slots and one column is
 // picked at a random point inside each - this guarantees a minimum spacing
 // between every pair of worms (the slot width itself) while still varying
 // every match, and the final shuffle means there's no fixed "team 1 always
 // spawns on the left" pattern: any worm can land in any slot, so a match's
 // two teammates can end up right next to each other or clear across the map.
-function pickSpawnFractions(): number[] {
+function pickSpawnFractions(count: number): number[] {
   const usableFraction = 1 - SPAWN_MARGIN_FRACTION * 2;
-  const slotFraction = usableFraction / SPAWN_COUNT;
+  const slotFraction = usableFraction / count;
   const pad = slotFraction * 0.15;
   const fractions: number[] = [];
-  for (let i = 0; i < SPAWN_COUNT; i++) {
+  for (let i = 0; i < count; i++) {
     const slotStart = SPAWN_MARGIN_FRACTION + i * slotFraction;
     fractions.push(randomBetween(slotStart + pad, slotStart + slotFraction - pad));
   }
@@ -133,9 +148,10 @@ function pickGroundTextureKey(): string {
 // zone actually is (previously duplicated verbatim between
 // sampleExcludingSpawnColumns and the now-folded-in hasSafeSpawnClearance).
 function spawnForbiddenIntervals(spawnFractions: number[], halfWidthFraction: number): Array<[number, number]> {
+  const margin = spawnExclusionMargin(spawnFractions.length);
   return spawnFractions.map((spawnFraction): [number, number] => [
-    spawnFraction - halfWidthFraction - SPAWN_EXCLUSION_MARGIN_FRACTION,
-    spawnFraction + halfWidthFraction + SPAWN_EXCLUSION_MARGIN_FRACTION,
+    spawnFraction - halfWidthFraction - margin,
+    spawnFraction + halfWidthFraction + margin,
   ]);
 }
 
@@ -226,6 +242,22 @@ const FLOATING_ISLAND_CENTER_Y_MAX_FRACTION = 0.5;
 // creeping closer to a spawn column than a plain circle of that width would.
 const FLOATING_ISLAND_LOBE_OVERSHOOT = 1.4;
 
+// Every footprint constant in this file is a fraction of width, tuned for a
+// 16:9 map. A wider-than-16:9 map (see WORLD_WIDTH) would otherwise just
+// stretch each hill, lake, building and branch sideways; instead each size
+// fraction is divided by this span and each feature count multiplied by it,
+// so a map twice as wide gets twice as many same-sized features. Exactly 1
+// at 16:9 (and clamped there for narrower maps), so those are unaffected.
+const REFERENCE_ASPECT = 16 / 9;
+
+function widthSpan(width: number, height: number): number {
+  return Math.max(1, width / (height * REFERENCE_ASPECT));
+}
+
+function scaledCount(min: number, max: number, span: number): number {
+  return Math.round(randomInt(min, max) * span);
+}
+
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
@@ -238,7 +270,7 @@ function computeMountainHeights(width: number, height: number): Float64Array {
   const heights = new Float64Array(width);
   const octaves = MOUNTAIN_OCTAVES.map((o) => ({
     amplitude: randomBetween(o.minAmplitudeFraction, o.maxAmplitudeFraction) * height,
-    frequency: randomBetween(o.minFrequency, o.maxFrequency),
+    frequency: randomBetween(o.minFrequency, o.maxFrequency) * widthSpan(width, height),
     phase: randomBetween(0, Math.PI * 2),
   }));
   for (let x = 0; x < width; x++) {
@@ -273,13 +305,16 @@ function applyLakes(
   height: number,
   spawnFractions: number[],
 ): Array<[number, number]> {
-  const count = randomInt(LAKE_COUNT_MIN, LAKE_COUNT_MAX);
+  const featureSpan = widthSpan(width, height);
+  const count = scaledCount(LAKE_COUNT_MIN, LAKE_COUNT_MAX, featureSpan);
   const targetHeight = height * LAKE_TARGET_HEIGHT_FRACTION;
   const lakeRanges: Array<[number, number]> = [];
   for (let i = 0; i < count; i++) {
     const lakeWidth = Math.max(
       1,
-      Math.round(randomBetween(width * LAKE_WIDTH_MIN_FRACTION, width * LAKE_WIDTH_MAX_FRACTION)),
+      Math.round(
+        randomBetween((width * LAKE_WIDTH_MIN_FRACTION) / featureSpan, (width * LAKE_WIDTH_MAX_FRACTION) / featureSpan),
+      ),
     );
     const halfWidthFraction = lakeWidth / width / 2;
     const centerX = Math.round(pickLakeCenterFraction(halfWidthFraction, spawnFractions) * width);
@@ -368,11 +403,14 @@ function applyBuildings(
   // whatever an earlier building already raised these columns to - otherwise
   // two overlapping buildings stack their rises and blow the height budget.
   const groundHeights = heights.slice();
-  const count = randomInt(BUILDING_COUNT_MIN, BUILDING_COUNT_MAX);
+  const span = widthSpan(width, height);
+  const count = scaledCount(BUILDING_COUNT_MIN, BUILDING_COUNT_MAX, span);
   for (let i = 0; i < count; i++) {
     const buildingWidth = Math.max(
       1,
-      Math.round(randomBetween(width * BUILDING_WIDTH_MIN_FRACTION, width * BUILDING_WIDTH_MAX_FRACTION)),
+      Math.round(
+        randomBetween((width * BUILDING_WIDTH_MIN_FRACTION) / span, (width * BUILDING_WIDTH_MAX_FRACTION) / span),
+      ),
     );
     const startX = pickBuildingStartX(width, buildingWidth, lakeRanges, spawnFractions);
     const minX = Math.max(0, startX);
@@ -544,9 +582,10 @@ function applyBranch(
   const topY = Math.max(topClearanceRow, y - climbHeight);
   const startY = y;
 
-  const baseRadius = randomBetween(BRANCH_BASE_RADIUS_MIN_FRACTION, BRANCH_BASE_RADIUS_MAX_FRACTION) * width;
+  const span = widthSpan(width, height);
+  const baseRadius = (randomBetween(BRANCH_BASE_RADIUS_MIN_FRACTION, BRANCH_BASE_RADIUS_MAX_FRACTION) * width) / span;
   const tipRadius = baseRadius * BRANCH_TIP_RADIUS_FRACTION;
-  const maxWander = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * width;
+  const maxWander = (BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * width) / span;
   const wanderMinX = Math.max(intervalMinX, startX - maxWander);
   const wanderMaxX = Math.min(intervalMaxX, startX + maxWander);
 
@@ -649,12 +688,13 @@ function placeBranchInInterval(
 // lake-center handling covers the one case that *is* excluded, a lake's
 // fully open water (see I3).
 function applyBranches(mask: Uint8Array, width: number, height: number, spawnFractions: number[]): number {
-  const count = randomInt(BRANCH_COUNT_MIN, BRANCH_COUNT_MAX);
-  const slotHalfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH;
-  const exclusionHalfWidthFraction = BRANCH_BASE_RADIUS_MAX_FRACTION;
+  const span = widthSpan(width, height);
+  const count = scaledCount(BRANCH_COUNT_MIN, BRANCH_COUNT_MAX, span);
+  const slotHalfWidthFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH / span;
+  const exclusionHalfWidthFraction = BRANCH_BASE_RADIUS_MAX_FRACTION / span;
   // Keeps two branches' own wander bands from overlapping outright, without
   // being so wide that a map-wide retry rarely finds room.
-  const minSeparationFraction = BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * 2;
+  const minSeparationFraction = (BRANCH_MAX_WANDER_FRACTION_OF_WIDTH * 2) / span;
   const slotFraction = 1 / count;
   const buildingRanges = buildingColumnRanges(mask, width, height);
   const forbidden = branchForbiddenIntervals(spawnFractions, buildingRanges, exclusionHalfWidthFraction);
@@ -716,11 +756,12 @@ function applyFloatingIslands(mask: Uint8Array, width: number, height: number, s
   }
   const topClearanceRow = Math.ceil(height * TOP_CLEARANCE_FRACTION) + 1;
 
-  const count = randomInt(FLOATING_ISLAND_COUNT_MIN, FLOATING_ISLAND_COUNT_MAX);
+  const span = widthSpan(width, height);
+  const count = scaledCount(FLOATING_ISLAND_COUNT_MIN, FLOATING_ISLAND_COUNT_MAX, span);
   for (let i = 0; i < count; i++) {
     const radius = randomBetween(
-      width * FLOATING_ISLAND_RADIUS_MIN_FRACTION,
-      width * FLOATING_ISLAND_RADIUS_MAX_FRACTION,
+      (width * FLOATING_ISLAND_RADIUS_MIN_FRACTION) / span,
+      (width * FLOATING_ISLAND_RADIUS_MAX_FRACTION) / span,
     );
     const halfWidthFraction = (radius * FLOATING_ISLAND_LOBE_OVERSHOOT) / width;
     const centerX = Math.round(pickIslandCenterFraction(halfWidthFraction, spawnFractions) * width);
@@ -793,7 +834,7 @@ function fillBaseMask(
 export function generateSilhouetteMask(
   width: number,
   height: number,
-  spawnFractions: number[] = pickSpawnFractions(),
+  spawnFractions: number[] = pickSpawnFractions(DEFAULT_SPAWN_COUNT),
 ): Uint8Array {
   const mask = new Uint8Array(width * height);
   const { heights, lakeRanges } = computeGroundHeights(width, height, spawnFractions);
@@ -817,7 +858,7 @@ export function generateSilhouetteMask(
 export function countPlacedBranchesForTest(
   width: number,
   height: number,
-  spawnFractions: number[] = pickSpawnFractions(),
+  spawnFractions: number[] = pickSpawnFractions(DEFAULT_SPAWN_COUNT),
 ): number {
   const mask = new Uint8Array(width * height);
   const { heights, lakeRanges } = computeGroundHeights(width, height, spawnFractions);
@@ -827,8 +868,8 @@ export function countPlacedBranchesForTest(
   return applyBranches(mask, width, height, spawnFractions);
 }
 
-export function createTerrain(width: number, height: number): Terrain {
-  const spawnFractions = pickSpawnFractions();
+export function createTerrain(width: number, height: number, spawnCount = DEFAULT_SPAWN_COUNT): Terrain {
+  const spawnFractions = pickSpawnFractions(spawnCount);
   const mask = generateSilhouetteMask(width, height, spawnFractions);
   const decorationMask = new Uint8Array(width * height);
   return {

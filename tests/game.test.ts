@@ -71,6 +71,49 @@ describe('tickTurnTimer', () => {
     tickTurnTimer(match, 46000);
     expect(match.currentIndex).toBe(1);
   });
+
+  it('uses the match\'s own turn length, and resets to it on every turn change', () => {
+    const match = createMatch(makeTeams(), 30000);
+    expect(match.turnTimeRemaining).toBe(30000);
+    expect(tickTurnTimer(match, 29000)).toBe(false);
+    expect(tickTurnTimer(match, 1000)).toBe(true);
+    expect(match.turnTimeRemaining).toBe(30000);
+  });
+});
+
+describe('four teams of three', () => {
+  function fourTeams(): Team[] {
+    return ['p1', 'p2', 'p3', 'p4'].map((id) => ({
+      playerId: id,
+      name: id,
+      worms: [0, 1, 2].map((i) => createWorm(0, 0, id, `${id}-${i}`)),
+    }));
+  }
+
+  it('rotates through all four teams, and each team through its three worms', () => {
+    const match = createMatch(fourTeams());
+    const turns: string[] = [match.turnOrder[match.currentIndex].worm.name];
+    for (let i = 0; i < 11; i++) {
+      advanceTurn(match);
+      turns.push(match.turnOrder[match.currentIndex].worm.name);
+    }
+    expect(turns).toEqual([
+      'p1-0', 'p2-0', 'p3-0', 'p4-0',
+      'p1-1', 'p2-1', 'p3-1', 'p4-1',
+      'p1-2', 'p2-2', 'p3-2', 'p4-2',
+    ]);
+  });
+
+  it('skips an eliminated team and keeps the match going until one team is left', () => {
+    const teams = fourTeams();
+    const match = createMatch(teams);
+    for (const w of teams[1].worms) w.alive = false;
+    advanceTurn(match);
+    expect(match.turnOrder[match.currentIndex].playerId).toBe('p3');
+    expect(checkWinner(teams)).toBeNull();
+    for (const w of [...teams[2].worms, ...teams[3].worms]) w.alive = false;
+    expect(checkWinner(teams)).toBe('p1');
+  });
 });
 
 describe('checkWinner', () => {

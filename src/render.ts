@@ -1,10 +1,10 @@
 import type Phaser from 'phaser';
-import { STARTING_HP } from './constants.js';
+import { CAMERA_ZOOM_BOOST } from './constants.js';
 import { WEAPON_KEYS } from './matchLoop.js';
 import { WEAPONS } from './weapons.js';
 import type { MatchState, WeaponKey, Team } from './types.js';
 
-export const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860 };
+export const TEAM_COLORS: Record<string, number> = { p1: 0x14d6b8, p2: 0xff3860, p3: 0xffb627, p4: 0x9b5de5 };
 
 // Display-list depth bands.
 //
@@ -86,6 +86,7 @@ const WEAPON_LABELS: Record<WeaponKey, string> = {
   clusterBomb: 'Cluster Bomb',
   clusterFragment: 'Cluster Fragment',
   bat: 'Baseball Bat',
+  steelStructure: 'Steel Girder',
 };
 
 export function weaponLabel(selectedWeapon: number): string {
@@ -114,7 +115,13 @@ export function updateWeaponText(
   remainingUses: number | undefined,
 ): void {
   const key = WEAPON_KEYS[selectedWeapon - 1] ?? WEAPON_KEYS[0];
-  const actionHint = WEAPONS[key].airstrike ? '\nFire to call random rain' : '';
+  const actionHint = WEAPONS[key].airstrike
+    ? '\nFire to call random rain'
+    : WEAPONS[key].homing
+      ? '\nClick the map to set a target'
+      : WEAPONS[key].structure
+        ? '\nClick near your worm to place'
+        : '';
   weaponText.setText(
     `Weapon: ${selectedWeapon} - ${weaponLabel(selectedWeapon)}${weaponAmmoLabel(remainingUses)}` + actionHint,
   );
@@ -154,13 +161,126 @@ export function chargeBarColor(chargePower: number): number {
 export function teamHealthFraction(team: Team): number {
   if (team.worms.length === 0) return 0;
   const totalHp = team.worms.reduce((sum, w) => sum + w.hp, 0);
-  const maxHp = team.worms.length * STARTING_HP;
+  const maxHp = team.worms.reduce((sum, w) => sum + w.maxHp, 0);
   return totalHp / maxHp;
 }
 
 export const TEAM_BAR_WIDTH = 220;
 const TEAM_BAR_MARGIN = 16; // horizontal inset from the screen edge
 
+const TEAM_BAR_ROW_HEIGHT = 46; // px between the first and second row of team bars (name + bar)
+
+// Even-indexed teams sit at the left edge, odd ones at the right, so teams
+// 1/2 keep their old spots and teams 3/4 stack in a second row beneath them.
 export function teamHealthBarX(index: number, canvasWidth: number): number {
-  return index === 0 ? TEAM_BAR_MARGIN : canvasWidth - TEAM_BAR_MARGIN - TEAM_BAR_WIDTH;
+  return index % 2 === 0 ? TEAM_BAR_MARGIN : canvasWidth - TEAM_BAR_MARGIN - TEAM_BAR_WIDTH;
+}
+
+// Vertical offset of a team's name + bar from the first row.
+export function teamHudRowOffset(index: number): number {
+  return Math.floor(index / 2) * TEAM_BAR_ROW_HEIGHT;
+}
+
+export interface WeaponPickerCell {
+  slot: number; // 1-based, same numbering as InputState.selectedWeapon
+  x: number;
+  y: number;
+}
+
+export interface WeaponPickerLayout {
+  panelX: number;
+  panelY: number;
+  panelWidth: number;
+  panelHeight: number;
+  cellWidth: number;
+  cellHeight: number;
+  cells: WeaponPickerCell[];
+}
+
+export const WEAPON_PICKER_TITLE_HEIGHT = 40;
+const WEAPON_PICKER_CELL_WIDTH = 116;
+const WEAPON_PICKER_CELL_HEIGHT = 84;
+const WEAPON_PICKER_GAP = 8;
+const WEAPON_PICKER_PADDING = 16;
+const WEAPON_PICKER_MAX_COLUMNS = 5;
+const WEAPON_PICKER_SCREEN_MARGIN = 16;
+
+// Grid of weapon slots centred on screen. Columns shrink to fit narrow
+// (mobile) viewports so the panel never runs off the side; cell (x, y) is
+// the cell's top-left corner in screen space.
+export function weaponPickerLayout(weaponCount: number, screenWidth: number, screenHeight: number): WeaponPickerLayout {
+  const fitColumns = Math.floor(
+    (screenWidth - WEAPON_PICKER_SCREEN_MARGIN * 2 - WEAPON_PICKER_PADDING * 2 + WEAPON_PICKER_GAP) /
+      (WEAPON_PICKER_CELL_WIDTH + WEAPON_PICKER_GAP),
+  );
+  const columns = Math.max(1, Math.min(WEAPON_PICKER_MAX_COLUMNS, weaponCount, fitColumns));
+  const rows = Math.ceil(weaponCount / columns);
+  const panelWidth =
+    WEAPON_PICKER_PADDING * 2 + columns * WEAPON_PICKER_CELL_WIDTH + (columns - 1) * WEAPON_PICKER_GAP;
+  const panelHeight =
+    WEAPON_PICKER_TITLE_HEIGHT +
+    WEAPON_PICKER_PADDING * 2 +
+    rows * WEAPON_PICKER_CELL_HEIGHT +
+    (rows - 1) * WEAPON_PICKER_GAP;
+  const panelX = Math.round((screenWidth - panelWidth) / 2);
+  const panelY = Math.max(WEAPON_PICKER_SCREEN_MARGIN, Math.round((screenHeight - panelHeight) / 2));
+  const cells: WeaponPickerCell[] = [];
+  for (let i = 0; i < weaponCount; i++) {
+    const column = i % columns;
+    const row = Math.floor(i / columns);
+    cells.push({
+      slot: i + 1,
+      x: panelX + WEAPON_PICKER_PADDING + column * (WEAPON_PICKER_CELL_WIDTH + WEAPON_PICKER_GAP),
+      y: panelY + WEAPON_PICKER_TITLE_HEIGHT + WEAPON_PICKER_PADDING + row * (WEAPON_PICKER_CELL_HEIGHT + WEAPON_PICKER_GAP),
+    });
+  }
+  return {
+    panelX,
+    panelY,
+    panelWidth,
+    panelHeight,
+    cellWidth: WEAPON_PICKER_CELL_WIDTH,
+    cellHeight: WEAPON_PICKER_CELL_HEIGHT,
+    cells,
+  };
+}
+
+// Keeps a camera's centre, on one axis, far enough from either world edge
+// that its view never shows past it. A view larger than the world on that
+// axis centres on it - or, with alignEnd, sits flush against the world's far
+// end (used vertically, so a zoomed-out view keeps the ground at the bottom
+// of the screen and shows extra sky above it rather than below the water).
+export function clampCameraCenter(focus: number, viewSize: number, worldSize: number, alignEnd = false): number {
+  if (viewSize >= worldSize) return alignEnd ? worldSize - viewSize / 2 : worldSize / 2;
+  const half = viewSize / 2;
+  return Math.max(half, Math.min(worldSize - half, focus));
+}
+
+// Wheel-zoom range. `max` is the default play zoom - (nearly) the whole
+// world height on screen, see CAMERA_ZOOM_BOOST - and the closest the
+// camera ever gets; `min` zooms out until the entire map fits.
+export function cameraZoomLimits(
+  screenWidth: number,
+  screenHeight: number,
+  worldWidth: number,
+  worldHeight: number,
+): { min: number; max: number } {
+  const max = (screenHeight / worldHeight) * CAMERA_ZOOM_BOOST;
+  const min = Math.min(max, screenWidth / worldWidth, screenHeight / worldHeight);
+  return { min, max };
+}
+
+// The camera centre (on one axis) that keeps `anchorWorld` - the world point
+// under the cursor - under the same screen position `pointerScreen` after
+// switching to `zoom`, so wheel zoom closes in on whatever the cursor is on.
+export function zoomAnchoredCenter(anchorWorld: number, pointerScreen: number, screenSize: number, zoom: number): number {
+  return anchorWorld - (pointerScreen - screenSize / 2) / zoom;
+}
+
+// Screen-edge scrolling: -1/1 while the pointer sits within `margin` px of
+// the left/right edge, 0 elsewhere.
+export function edgeScrollDirection(pointerX: number, screenWidth: number, margin: number): -1 | 0 | 1 {
+  if (pointerX <= margin) return -1;
+  if (pointerX >= screenWidth - margin) return 1;
+  return 0;
 }

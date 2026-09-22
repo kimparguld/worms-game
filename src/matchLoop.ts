@@ -12,13 +12,18 @@ import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js'
 import { createProjectile, updateProjectile } from './projectile.js';
 import { calcDamage, raycastHit, WEAPONS, WEAPON_MATCH_LIMITS } from './weapons.js';
 import { fireRope, updateRopeSwing, adjustRopeLength } from './rope.js';
+import { createStructure, isStructurePlacementValid, stampStructure, structureRotation } from './structures.js';
 import {
   TURN_BANNER_DURATION_MS,
   ROPE_HOP_IMPULSE,
   SHOTGUN_TRACER_DURATION,
   EXPLOSION_EFFECT_DURATION,
   SPLASH_EFFECT_DURATION,
-  DEFAULT_WORM_NAMES,
+  MIN_TEAMS,
+  WORMS_PER_TEAM,
+  TURN_DURATION_MS,
+  defaultTeamName,
+  defaultWormName,
   DEATH_EXPLOSION_RADIUS,
   DEATH_EXPLOSION_DAMAGE,
   GRAVITY,
@@ -27,7 +32,7 @@ import {
   MELEE_KNOCKBACK_LIFT,
   MELEE_KNOCKBACK_DURATION,
 } from './constants.js';
-import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate, Explosion, Projectile } from './types.js';
+import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, MatchSetup, Vector2, Crate, Explosion, Projectile } from './types.js';
 
 export const WEAPON_KEYS: WeaponKey[] = [
   'bazooka',
@@ -43,12 +48,14 @@ export const WEAPON_KEYS: WeaponKey[] = [
   'homingMissile',
   'clusterBomb',
   'bat',
+  'steelStructure',
 ];
 
 export function cycleWeapon(current: number, delta: number): number {
   const max = WEAPON_KEYS.length;
   return ((current - 1 + delta + max) % max) + 1;
 }
+
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
 const AIRSTRIKE_STRIKE_COUNT = 5;
@@ -63,38 +70,46 @@ const CRATE_PICKUP_RADIUS = 24; // px - distance from a worm's center that count
 const CRATE_EDGE_MARGIN = 60; // keep the spawn x away from the world's edges
 const CRATE_FALL_START_Y = -20; // spawns above the visible world and falls in, regardless of terrain height at that x
 
-export function createMatchRuntime(
-  width: number,
-  height: number,
-  team1Name = 'Team 1',
-  team2Name = 'Team 2',
-  wormNames: [string, string, string, string] = DEFAULT_WORM_NAMES,
-): MatchRuntime {
-  const terrain = createTerrain(width, height);
+// The match every setting left at its default produces: MIN_TEAMS teams of
+// WORMS_PER_TEAM worms, default names, STARTING_HP, TURN_DURATION_MS.
+export function defaultMatchSetup(): MatchSetup {
+  return {
+    teams: Array.from({ length: MIN_TEAMS }, (_, t) => ({
+      name: defaultTeamName(t),
+      wormNames: Array.from({ length: WORMS_PER_TEAM }, (_, w) => defaultWormName(t, w)),
+    })),
+    startingHp: STARTING_HP,
+    turnDurationMs: TURN_DURATION_MS,
+  };
+}
+
+export function createMatchRuntime(width: number, height: number, setup: MatchSetup = defaultMatchSetup()): MatchRuntime {
+  const wormCount = setup.teams.reduce((sum, t) => sum + t.wormNames.length, 0);
+  const terrain = createTerrain(width, height, wormCount);
   const spawnY = (x: number) => findSurfaceY(terrain, x) - SPAWN_SURFACE_BUFFER;
   // Spawn columns are whatever random fractions this terrain's own
   // generation picked and kept its branches/buildings/lakes/islands clear of -
   // see terrain.ts's pickSpawnFractions - so worms and terrain always agree
   // on where it's safe to land, even though it's a different set every match.
-  const [p1aX, p1bX, p2aX, p2bX] = terrain.spawnFractions.map((f) => Math.round(f * width));
-  const teams: Team[] = [
-    {
-      playerId: 'p1',
-      name: team1Name,
-      worms: [createWorm(p1aX, spawnY(p1aX), 'p1', wormNames[0]), createWorm(p1bX, spawnY(p1bX), 'p1', wormNames[1])],
+  // Already shuffled there, so handing them out in order still mixes teams.
+  const spawnXs = terrain.spawnFractions.map((f) => Math.round(f * width));
+  let nextSpawn = 0;
+  const teams: Team[] = setup.teams.map((teamSetup, t) => {
+    const playerId = `p${t + 1}`;
+    return {
+      playerId,
+      name: teamSetup.name,
+      worms: teamSetup.wormNames.map((wormName) => {
+        const x = spawnXs[nextSpawn++];
+        return createWorm(x, spawnY(x), playerId, wormName, setup.startingHp);
+      }),
       ammo: { ...WEAPON_MATCH_LIMITS },
-    },
-    {
-      playerId: 'p2',
-      name: team2Name,
-      worms: [createWorm(p2aX, spawnY(p2aX), 'p2', wormNames[2]), createWorm(p2bX, spawnY(p2bX), 'p2', wormNames[3])],
-      ammo: { ...WEAPON_MATCH_LIMITS },
-    },
-  ];
+    };
+  });
   return {
     terrain,
     teams,
-    match: createMatch(teams),
+    match: createMatch(teams, setup.turnDurationMs),
     projectiles: [],
     rope: null,
     charging: false,
@@ -108,6 +123,8 @@ export function createMatchRuntime(
     crates: [],
     cratePickups: [],
     turnsSinceCrateEvent: 0,
+    homingTarget: null,
+    structures: [],
   };
 }
 
@@ -211,7 +228,7 @@ function collectCrates(rt: MatchRuntime): void {
       (w) => w.alive && !w.dying && Math.hypot(w.x - crate.x, w.y - crate.y) < CRATE_PICKUP_RADIUS,
     );
     if (collector) {
-      collector.hp = Math.min(STARTING_HP, collector.hp + CRATE_HEAL_AMOUNT);
+      collector.hp = Math.min(collector.maxHp, collector.hp + CRATE_HEAL_AMOUNT);
       rt.cratePickups.push({ x: crate.x, y: crate.y, timer: SPLASH_EFFECT_DURATION });
     } else {
       remaining.push(crate);
@@ -328,7 +345,9 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
   } else if (def.melee) {
     meleeStrike(rt, worm, def.range ?? 50, def.maxDamage);
   } else {
-    rt.projectiles.push(createProjectile(weaponKey, worm.x, worm.y, fireAngle, power, worm));
+    const projectile = createProjectile(weaponKey, worm.x, worm.y, fireAngle, power, worm);
+    if (def.homing && rt.homingTarget) projectile.target = { ...rt.homingTarget };
+    rt.projectiles.push(projectile);
     rt.retirementTimer = 2;
   }
 }
@@ -344,6 +363,30 @@ function hasActiveStaticFuseProjectile(rt: MatchRuntime, worm: Worm): boolean {
       weapon.maxSpeed === 0
     );
   });
+}
+
+// Places the selected steel girder centred on (x, y), tilted by the active
+// worm's aim - called from GameScene's click handler, outside stepMatch, so
+// it re-checks everything stepMatch's own fire path would. Uses up the turn
+// like firing does. Returns whether a girder was actually placed.
+export function tryPlaceStructure(rt: MatchRuntime, input: InputState, x: number, y: number): boolean {
+  if (rt.turnBannerTimer !== null || rt.retirementTimer !== null || rt.rope) return false;
+  const weaponKey = WEAPON_KEYS[input.selectedWeapon - 1];
+  if (!weaponKey || !WEAPONS[weaponKey].structure) return false;
+  const active = currentWorm(rt.match);
+  const worm = active.worm;
+  if (!worm.alive || worm.dying) return false;
+  const team = rt.teams.find((t) => t.playerId === active.playerId)!;
+  const ammo = team.ammo?.[weaponKey];
+  if (ammo !== undefined && ammo <= 0) return false;
+
+  const structure = createStructure(x, y, structureRotation(worm));
+  if (!isStructurePlacementValid(rt.terrain, allWorms(rt), worm, structure)) return false;
+  stampStructure(rt.terrain, structure);
+  (rt.structures ??= []).push(structure);
+  if (ammo !== undefined) team.ammo![weaponKey] = ammo - 1;
+  rt.retirementTimer = 1;
+  return true;
 }
 
 export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void {
@@ -434,7 +477,8 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     // WEAPON_MATCH_LIMITS) simply doesn't respond to fire input at all - no
     // charge starts, nothing fires. The player can still select it (so the
     // HUD can show it's spent) but pressing fire is a no-op.
-    if (rt.retirementTimer === null && !weaponDepleted) {
+    // Structures are placed by clicking (tryPlaceStructure), not fired.
+    if (rt.retirementTimer === null && !weaponDepleted && !WEAPONS[weaponKey].structure) {
       const chargeableWeapon = WEAPONS[weaponKey].chargeable;
       if (input.firing && chargeableWeapon) {
         rt.charging = true;
@@ -528,6 +572,11 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
     rt.rope = null;
     rt.turnBannerTimer = TURN_BANNER_DURATION_MS;
     rt.shotgunTracer = null;
+    rt.homingTarget = null;
+    // A bat victim's knockback window is short and self-resolving, but a turn
+    // ending inside it would otherwise leave the next worm's first moments
+    // uncontrollable (updateWormPhysics ignores input while it runs).
+    for (const w of allWorms(rt)) w.knockbackTimer = null;
     input.selectedWeapon = 1;
     rt.turnsSinceCrateEvent += 1;
     if (rt.turnsSinceCrateEvent >= CRATE_SPAWN_INTERVAL_TURNS) spawnCrateIfDue(rt);

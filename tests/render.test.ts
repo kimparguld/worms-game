@@ -12,9 +12,16 @@ import {
   deathWiggleRotation,
   deathWiggleScale,
   teamHealthBarX,
+  teamHudRowOffset,
   tracerAlpha,
+  weaponPickerLayout,
+  clampCameraCenter,
+  edgeScrollDirection,
+  cameraZoomLimits,
+  zoomAnchoredCenter,
 } from '../src/render.js';
 import { createWorm } from '../src/worm.js';
+import { CAMERA_ZOOM_BOOST } from '../src/constants.js';
 
 describe('turnBannerLabel', () => {
   it('formats a playerId like "p2" as "Player 2 turn"', () => {
@@ -124,6 +131,12 @@ describe('teamHealthFraction', () => {
     expect(teamHealthFraction(team)).toBe(1);
   });
 
+  it('measures against the worms\' own starting health, not the default', () => {
+    const team = { playerId: 'p1', name: 'Team 1', worms: [createWorm(0, 0, 'p1', 'A', 50), createWorm(0, 0, 'p1', 'B', 50)] };
+    team.worms[0].hp = 0;
+    expect(teamHealthFraction(team)).toBe(0.5);
+  });
+
   it('is the sum of remaining hp over the sum of max hp', () => {
     const team = { playerId: 'p1', name: 'Team 1', worms: [createWorm(0, 0, 'p1', 'A'), createWorm(0, 0, 'p1', 'B')] };
     team.worms[0].hp = 50; // out of 100
@@ -210,5 +223,79 @@ describe('teamHealthBarX', () => {
 
   it('right-aligns the second team', () => {
     expect(teamHealthBarX(1, 960)).toBe(960 - 16 - 220);
+  });
+
+  it('puts teams 3 and 4 under teams 1 and 2, in a second row', () => {
+    expect(teamHealthBarX(2, 960)).toBe(teamHealthBarX(0, 960));
+    expect(teamHealthBarX(3, 960)).toBe(teamHealthBarX(1, 960));
+    expect(teamHudRowOffset(0)).toBe(0);
+    expect(teamHudRowOffset(1)).toBe(0);
+    expect(teamHudRowOffset(2)).toBeGreaterThan(0);
+    expect(teamHudRowOffset(3)).toBe(teamHudRowOffset(2));
+  });
+});
+
+describe('weaponPickerLayout', () => {
+  it('gives every weapon slot its own non-overlapping cell inside the panel', () => {
+    const layout = weaponPickerLayout(13, 1280, 720);
+    expect(layout.cells.map((c) => c.slot)).toEqual(Array.from({ length: 13 }, (_, i) => i + 1));
+    for (const cell of layout.cells) {
+      expect(cell.x).toBeGreaterThanOrEqual(layout.panelX);
+      expect(cell.y).toBeGreaterThanOrEqual(layout.panelY);
+      expect(cell.x + layout.cellWidth).toBeLessThanOrEqual(layout.panelX + layout.panelWidth);
+      expect(cell.y + layout.cellHeight).toBeLessThanOrEqual(layout.panelY + layout.panelHeight);
+    }
+    const keys = new Set(layout.cells.map((c) => `${c.x},${c.y}`));
+    expect(keys.size).toBe(13);
+  });
+
+  it('drops columns to fit a narrow screen', () => {
+    const layout = weaponPickerLayout(13, 360, 800);
+    expect(layout.panelX).toBeGreaterThanOrEqual(0);
+    expect(layout.panelX + layout.panelWidth).toBeLessThanOrEqual(360);
+  });
+});
+
+describe('clampCameraCenter', () => {
+  it('passes a focus point in the middle of the world straight through', () => {
+    expect(clampCameraCenter(2000, 1000, 4480)).toBe(2000);
+  });
+
+  it('stops the view at the left and right world edges', () => {
+    expect(clampCameraCenter(100, 1000, 4480)).toBe(500);
+    expect(clampCameraCenter(4400, 1000, 4480)).toBe(3980);
+  });
+
+  it('centres on the world when the view is wider than it', () => {
+    expect(clampCameraCenter(0, 5000, 4480)).toBe(2240);
+  });
+
+  it('can instead sit an oversized view flush with the far end of the world', () => {
+    expect(clampCameraCenter(0, 2000, 1260, true)).toBe(1260 - 1000);
+  });
+});
+
+describe('edgeScrollDirection', () => {
+  it('scrolls toward whichever edge the pointer is near, and not at all in between', () => {
+    expect(edgeScrollDirection(10, 1280, 40)).toBe(-1);
+    expect(edgeScrollDirection(1270, 1280, 40)).toBe(1);
+    expect(edgeScrollDirection(640, 1280, 40)).toBe(0);
+  });
+});
+
+describe('cameraZoomLimits', () => {
+  it('zooms out far enough to fit the whole map and no closer in than the default zoom', () => {
+    const { min, max } = cameraZoomLimits(1280, 720, 4480, 1260);
+    expect(min).toBeCloseTo(1280 / 4480); // whole width on screen
+    expect(max).toBeCloseTo((720 / 1260) * CAMERA_ZOOM_BOOST);
+  });
+});
+
+describe('zoomAnchoredCenter', () => {
+  it('keeps the world point under the cursor at the same screen position after zooming', () => {
+    const zoom = 0.8;
+    const center = zoomAnchoredCenter(1500, 1000, 1280, zoom);
+    // screen x -> world x under a camera centred at `center`
+    expect(center + (1000 - 640) / zoom).toBeCloseTo(1500);
   });
 });

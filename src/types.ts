@@ -47,6 +47,10 @@ export interface Worm {
   vx: number;
   vy: number;
   hp: number;
+  // The HP this worm started the match with - picked on the start screen,
+  // so it varies per match rather than being STARTING_HP. Caps crate heals
+  // and scales the worm's/team's health bars.
+  maxHp: number;
   team: string;
   name: string;
   facing: 1 | -1;
@@ -86,8 +90,24 @@ export interface MatchState {
   turnOrder: TurnEntry[];
   currentIndex: number;
   turnTimeRemaining: number;
+  // Full length of every turn this match (start screen setting) - what
+  // turnTimeRemaining resets to on each turn change.
+  turnDurationMs: number;
   wind: number;
   teamWormPointer: Record<string, number>;
+}
+
+// What the start screen hands to GameScene/createMatchRuntime: one entry
+// per playing team (2-4, WORMS_PER_TEAM names each) plus the match settings.
+export interface TeamSetup {
+  name: string;
+  wormNames: string[];
+}
+
+export interface MatchSetup {
+  teams: TeamSetup[];
+  startingHp: number;
+  turnDurationMs: number;
 }
 
 export interface InputState {
@@ -115,7 +135,8 @@ export type WeaponKey =
   | 'homingMissile'
   | 'clusterBomb'
   | 'clusterFragment'
-  | 'bat';
+  | 'bat'
+  | 'steelStructure';
 
 export interface WeaponDef {
   key: WeaponKey;
@@ -137,6 +158,17 @@ export interface WeaponDef {
   melee: boolean;
   homing: boolean;
   clusterCount?: number;
+  // Placed with the mouse as a solid girder rather than fired - see
+  // structures.ts and tryPlaceStructure in matchLoop.ts.
+  structure?: boolean;
+  // Hard cap (seconds) on how long a projectile may stay in flight before it
+  // is forced to detonate where it is - a termination backstop, deliberately
+  // separate from fuseTime so a weapon can have one without also taking on
+  // fuse-based terrain behavior (resting/bouncing instead of exploding on
+  // contact). Only weapons that could otherwise fly indefinitely need it: the
+  // homing missile, whose finite turn radius means a point-blank shot can
+  // circle a target it can't turn tightly enough to reach. Unset elsewhere.
+  maxLifetime?: number;
   range?: number;
 }
 
@@ -147,7 +179,14 @@ export interface Projectile {
   vx: number;
   vy: number;
   fuseRemaining: number | null;
+  // Seconds left before WeaponDef.maxLifetime forces this projectile to
+  // detonate; null for the weapons that don't set maxLifetime (all but the
+  // homing missile), which skips the check entirely.
+  lifetimeRemaining: number | null;
   alive: boolean;
+  // Homing missile only: the world point the player picked to steer toward
+  // (see MatchRuntime.homingTarget). Unset means seek the nearest enemy.
+  target?: Vector2;
   // The worm that fired it, excluded from direct-hit detection so a shot
   // doesn't detonate the instant it leaves its own shooter's position.
   owner?: Worm;
@@ -156,6 +195,16 @@ export interface Projectile {
 export interface ProjectileUpdateResult {
   exploded: boolean;
   spawned?: Projectile[];
+}
+
+// A steel girder placed by a worm. Only its placement lives here: once
+// stamped, its collision is plain decorationMask terrain (see structures.ts).
+export interface SteelStructure {
+  x: number; // centre
+  y: number;
+  rotation: number; // radians
+  length: number;
+  thickness: number;
 }
 
 export interface Rope {
@@ -243,4 +292,11 @@ export interface MatchRuntime {
   crates: Crate[];
   cratePickups: CratePickup[];
   turnsSinceCrateEvent: number;
+  // Where the active player clicked to aim the homing missile this turn;
+  // copied onto the missile when it fires and cleared on every turn change.
+  // Optional so hand-built runtimes in tests keep compiling.
+  homingTarget?: Vector2 | null;
+  // Every girder placed this match, in order, for TerrainRenderer to draw.
+  // Optional for the same reason as homingTarget.
+  structures?: SteelStructure[];
 }

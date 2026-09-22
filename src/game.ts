@@ -1,7 +1,7 @@
 import { TURN_DURATION_MS, WIND_MAX } from './constants.js';
 import type { Team, TurnEntry, MatchState, Worm } from './types.js';
 
-export function createMatch(teams: Team[]): MatchState {
+export function createMatch(teams: Team[], turnDurationMs = TURN_DURATION_MS): MatchState {
   const turnOrder: TurnEntry[] = [];
   const maxWorms = Math.max(...teams.map((t) => t.worms.length));
   for (let i = 0; i < maxWorms; i++) {
@@ -18,7 +18,8 @@ export function createMatch(teams: Team[]): MatchState {
     teams,
     turnOrder,
     currentIndex: 0,
-    turnTimeRemaining: TURN_DURATION_MS,
+    turnTimeRemaining: turnDurationMs,
+    turnDurationMs,
     wind: randomWind(),
     teamWormPointer,
   };
@@ -54,7 +55,7 @@ export function advanceTurn(matchState: MatchState): boolean {
     if (idx === -1) continue;
     teamWormPointer[team.playerId] = wormIdx;
     matchState.currentIndex = idx;
-    matchState.turnTimeRemaining = TURN_DURATION_MS;
+    matchState.turnTimeRemaining = matchState.turnDurationMs;
     matchState.wind = randomWind();
     return true;
   }

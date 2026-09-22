@@ -1,4 +1,5 @@
 import { isSolid } from './terrain.js';
+import { WORM_HIT_RADIUS } from './constants.js';
 import type { Terrain, WeaponDef, WeaponKey, Worm, RaycastHit, ProjectileIntegration, Vector2 } from './types.js';
 
 // Weapons with a cap on total uses per team per match - absent keys mean no
@@ -8,17 +9,20 @@ export const WEAPON_MATCH_LIMITS: Partial<Record<WeaponKey, number>> = {
   holyHandGrenade: 2,
   homingMissile: 2,
   clusterBomb: 2,
+  steelStructure: 8,
 };
 
 export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   bazooka: {
     key: 'bazooka',
-    maxDamage: 60,
-    blastRadius: 40,
+    maxDamage: 80,
+    // Wider than the crater so a near miss still hurts without carving
+    // any more terrain.
+    blastRadius: 55,
     craterRadius: 40,
     chargeable: true,
     minSpeed: 250,
-    maxSpeed: 1100,
+    maxSpeed: 1200,
     gravity: true,
     windAffected: true,
     fuseTime: null,
@@ -33,12 +37,12 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   grenade: {
     key: 'grenade',
-    maxDamage: 50,
-    blastRadius: 45,
+    maxDamage: 60,
+    blastRadius: 65,
     craterRadius: 45,
     chargeable: true,
     minSpeed: 150,
-    maxSpeed: 900,
+    maxSpeed: 1200,
     gravity: true,
     windAffected: true,
     fuseTime: 3.5,
@@ -53,7 +57,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   shotgun: {
     key: 'shotgun',
-    maxDamage: 25,
+    maxDamage: 85,
     blastRadius: 10,
     craterRadius: 10,
     chargeable: false,
@@ -91,13 +95,13 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     drill: false,
     melee: false,
     homing: false,
-    range: 400,
+    range: 600,
   },
   dynamite: {
     key: 'dynamite',
-    maxDamage: 75,
-    blastRadius: 60,
-    craterRadius: 60,
+    maxDamage: 85,
+    blastRadius: 80,
+    craterRadius: 70,
     chargeable: false,
     minSpeed: 0,
     maxSpeed: 0,
@@ -115,7 +119,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   sniperRifle: {
     key: 'sniperRifle',
-    maxDamage: 45,
+    maxDamage: 85,
     blastRadius: 10,
     craterRadius: 10,
     chargeable: false,
@@ -132,11 +136,11 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     drill: false,
     melee: false,
     homing: false,
-    range: 1000,
+    range: 1400,
   },
   airstrikeRocket: {
     key: 'airstrikeRocket',
-    maxDamage: 36,
+    maxDamage: 56,
     blastRadius: 60,
     craterRadius: 40,
     chargeable: false,
@@ -156,12 +160,12 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   holyHandGrenade: {
     key: 'holyHandGrenade',
-    maxDamage: 125,
+    maxDamage: 135,
     blastRadius: 130,
     craterRadius: 130,
     chargeable: true,
     minSpeed: 150,
-    maxSpeed: 650,
+    maxSpeed: 1150,
     gravity: true,
     windAffected: true,
     fuseTime: 6,
@@ -176,7 +180,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   mine: {
     key: 'mine',
-    maxDamage: 70,
+    maxDamage: 75,
     blastRadius: 55,
     craterRadius: 55,
     chargeable: false,
@@ -217,12 +221,17 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   homingMissile: {
     key: 'homingMissile',
-    maxDamage: 55,
-    blastRadius: 45,
-    craterRadius: 45,
+    maxDamage: 75,
+    blastRadius: 65,
+    craterRadius: 55,
     chargeable: true,
     minSpeed: 250,
-    maxSpeed: 700,
+    // Deliberately slower than the bazooka's 1100: paired with
+    // HOMING_TURN_RATE it fixes the missile's minimum turn radius
+    // (speed / turn rate) at ~72px, small enough that the missile can always
+    // curve back onto a target at any realistic engagement range instead of
+    // settling into a permanent orbit around it. See HOMING_TURN_RATE.
+    maxSpeed: 1050,
     gravity: false,
     windAffected: false,
     fuseTime: null,
@@ -234,6 +243,12 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     drill: false,
     melee: false,
     homing: true,
+    // Self-destructs after 6s in flight. No turn radius above zero can reach
+    // a target closer than twice that radius off its nose, so a point-blank
+    // shot can still circle rather than converge; this bounds that case (and
+    // any other untested one) so an in-flight missile can never outlive its
+    // turn - matchLoop's retirement path waits on rt.projectiles emptying.
+    maxLifetime: 6,
   },
   clusterBomb: {
     key: 'clusterBomb',
@@ -242,7 +257,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     craterRadius: 25,
     chargeable: true,
     minSpeed: 150,
-    maxSpeed: 750,
+    maxSpeed: 950,
     gravity: true,
     windAffected: true,
     fuseTime: null,
@@ -258,12 +273,12 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   clusterFragment: {
     key: 'clusterFragment',
-    maxDamage: 18,
+    maxDamage: 19,
     blastRadius: 35,
     craterRadius: 20,
     chargeable: false,
     // Not used to compute launch speed (fragments get an explicit vx/vy at
-    // spawn time, see Task 3) - kept nonzero only so
+    // spawn time, see explode() in projectile.ts) - kept nonzero only so
     // hasActiveStaticFuseProjectile's `minSpeed === 0 && maxSpeed === 0`
     // check in matchLoop.ts can't misclassify a fragment as a static-fuse
     // drop like the mine/dynamite.
@@ -283,7 +298,7 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
   },
   bat: {
     key: 'bat',
-    maxDamage: 30,
+    maxDamage: 40,
     blastRadius: 0,
     craterRadius: 0,
     chargeable: false,
@@ -302,6 +317,27 @@ export const WEAPONS: Record<WeaponKey, WeaponDef> = {
     homing: false,
     range: 55,
   },
+  steelStructure: {
+    key: 'steelStructure',
+    maxDamage: 0,
+    blastRadius: 0,
+    craterRadius: 0,
+    chargeable: false,
+    minSpeed: 0,
+    maxSpeed: 0,
+    gravity: false,
+    windAffected: false,
+    fuseTime: null,
+    hitscan: false,
+    pellets: 0,
+    bounces: false,
+    rope: false,
+    airstrike: false,
+    drill: false,
+    melee: false,
+    homing: false,
+    structure: true,
+  },
 };
 
 export function integrateProjectile(
@@ -319,7 +355,14 @@ export function integrateProjectile(
   };
 }
 
-export const HOMING_TURN_RATE = Math.PI * 0.8; // rad/s - full lock-on takes a couple seconds, not an instant snap
+// rad/s. Sized against homingMissile.maxSpeed, not for turn speed's own sake:
+// a guided projectile's minimum turn radius is speed / turn rate, and it can
+// never reach a target sitting inside that circle, so too slow a turn rate
+// makes the missile orbit its target forever instead of hitting it. At
+// 450px/s this gives a ~72px radius - well under any realistic engagement
+// distance - while a full 360deg/s turn still reads as a missile curving
+// onto its target rather than snapping to it instantly.
+export const HOMING_TURN_RATE = Math.PI * 2;
 
 export function applyHoming(vel: Vector2, pos: Vector2, target: Vector2, dt: number): Vector2 {
   const currentAngle = Math.atan2(vel.y, vel.x);
@@ -356,7 +399,9 @@ export function raycastHit(
   for (let d = 0; d <= maxRange; d += step) {
     const x = originX + dx * d;
     const y = originY + dy * d;
-    const hitWorm = worms.find((w) => w.alive && !w.dying && w !== excludeWorm && Math.hypot(w.x - x, w.y - y) < 10);
+    const hitWorm = worms.find(
+      (w) => w.alive && !w.dying && w !== excludeWorm && Math.hypot(w.x - x, w.y - y) < WORM_HIT_RADIUS,
+    );
     if (hitWorm) return { type: 'worm', worm: hitWorm, x, y, distance: d };
     if (isSolid(terrain, x, y)) return { type: 'terrain', x, y, distance: d };
   }

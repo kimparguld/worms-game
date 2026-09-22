@@ -25,7 +25,7 @@ export class EndScene extends Phaser.Scene {
 
     this.add.image(0, 0, 'sky').setOrigin(0, 0).setDisplaySize(this.scale.width, this.scale.height).setAlpha(0.35);
 
-    const winnerColors: Record<string, string> = { p1: '#2fbfae', p2: '#e85d75' };
+    const winnerColors: Record<string, string> = { p1: '#2fbfae', p2: '#e85d75', p3: '#ffc55c', p4: '#b388eb' };
     const labelColor = winnerColors[this.winner] ?? '#fff8e7';
     const label = this.winner === 'draw' ? "It's a draw!" : `${this.winnerName} wins!`;
 
@@ -73,6 +73,8 @@ export class EndScene extends Phaser.Scene {
     const teamTints: Record<string, number[]> = {
       p1: [0x14d6b8, 0xffffff, 0x0c8f7c],
       p2: [0xff3860, 0xffffff, 0xc22346],
+      p3: [0xffb627, 0xffffff, 0xd18a00],
+      p4: [0x9b5de5, 0xffffff, 0x6a33b8],
     };
     const confetti = this.add.particles(0, 0, 'particleDot', {
       x: { min: 0, max: this.scale.width },

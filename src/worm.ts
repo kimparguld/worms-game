@@ -6,9 +6,9 @@ import {
 } from './constants.js';
 import type { Terrain, Worm, WormInput } from './types.js';
 
-export function createWorm(x: number, y: number, team: string, name: string): Worm {
+export function createWorm(x: number, y: number, team: string, name: string, maxHp = STARTING_HP): Worm {
   return {
-    x, y, vx: 0, vy: 0, hp: STARTING_HP, team, name,
+    x, y, vx: 0, vy: 0, hp: maxHp, maxHp, team, name,
     facing: 1, aimAngle: -Math.PI / 4, alive: true, onGround: false,
     dying: false, deathTimer: null, knockbackTimer: null,
   };
@@ -95,17 +95,39 @@ export function updateWormPhysics(worm: Worm, terrain: Terrain, input: WormInput
 
   worm.vy += GRAVITY * dt;
 
-  const nextX = worm.x + worm.vx * dt;
-  if (isSolid(terrain, nextX, worm.y)) {
-    if (worm.onGround && !isSolid(terrain, nextX, worm.y - WORM_STEP_HEIGHT)) {
-      // Small slope/step: let the worm climb it instead of stopping dead.
-      worm.x = nextX;
-      worm.y -= WORM_STEP_HEIGHT;
-    } else {
-      worm.vx = 0;
+  if (knockedBack) {
+    // High-speed knockback can move many pixels in one tick - sample the
+    // path in small steps (same swept-collision idea findPathCollision uses
+    // for projectiles in projectile.ts) instead of just the endpoint, so it
+    // can't tunnel through a thin wall the way a single-point check would.
+    // Deliberately no step-up allowance here: a worm mid-shove is in an
+    // uncontrolled ballistic state, not climbing stairs, so it just stops
+    // hard against any solid obstacle.
+    const totalDx = worm.vx * dt;
+    const steps = Math.max(1, Math.ceil(Math.abs(totalDx)));
+    let blocked = false;
+    for (let step = 1; step <= steps; step++) {
+      const stepX = worm.x + (totalDx * step) / steps;
+      if (isSolid(terrain, stepX, worm.y)) {
+        worm.vx = 0;
+        blocked = true;
+        break;
+      }
     }
+    if (!blocked) worm.x += totalDx;
   } else {
-    worm.x = nextX;
+    const nextX = worm.x + worm.vx * dt;
+    if (isSolid(terrain, nextX, worm.y)) {
+      if (worm.onGround && !isSolid(terrain, nextX, worm.y - WORM_STEP_HEIGHT)) {
+        // Small slope/step: let the worm climb it instead of stopping dead.
+        worm.x = nextX;
+        worm.y -= WORM_STEP_HEIGHT;
+      } else {
+        worm.vx = 0;
+      }
+    } else {
+      worm.x = nextX;
+    }
   }
 
   const nextY = worm.y + worm.vy * dt;

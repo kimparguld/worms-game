@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { WORM_HIT_RADIUS } from '../src/constants.js';
 import { WEAPONS, integrateProjectile, calcDamage, raycastHit, applyHoming, HOMING_TURN_RATE } from '../src/weapons.js';
 import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 
 describe('WEAPONS', () => {
-  it('defines exactly the fourteen spec weapons', () => {
+  it('defines exactly the fifteen spec weapons', () => {
     expect(Object.keys(WEAPONS).sort()).toEqual(
       [
         'bazooka',
@@ -21,6 +22,7 @@ describe('WEAPONS', () => {
         'clusterBomb',
         'clusterFragment',
         'bat',
+        'steelStructure',
       ].sort(),
     );
   });
@@ -158,6 +160,24 @@ describe('raycastHit', () => {
     terrain.decorationMask.fill(0);
     const shooter = createWorm(50, 50, 'p1', 'Shooter');
     const hit = raycastHit(terrain, [shooter], 50, 50, 0, 200, shooter);
+    expect(hit.type).toBe('none');
+  });
+
+  it('hits a worm the ray passes near but not through its center - the rendered worm is far wider than its physics point', () => {
+    const terrain = createTerrain(100, 100);
+    terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
+    const worm = createWorm(50 + WORM_HIT_RADIUS - 4, 40, 'p1', 'A');
+    const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);
+    expect(hit.type).toBe('worm');
+  });
+
+  it('does not hit a worm the ray clears by more than WORM_HIT_RADIUS', () => {
+    const terrain = createTerrain(100, 100);
+    terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
+    const worm = createWorm(50 + WORM_HIT_RADIUS + 2, 40, 'p1', 'A');
+    const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);
     expect(hit.type).toBe('none');
   });
 

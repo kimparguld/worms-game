@@ -27,9 +27,9 @@ describe('constants', () => {
 });
 
 describe('world size', () => {
-  it('is larger than the 1280x720 viewport, in the same 16:9 ratio', () => {
+  it('is larger than the 1280x720 viewport and wider than its 16:9 ratio', () => {
     expect(WORLD_WIDTH).toBeGreaterThan(1280);
     expect(WORLD_HEIGHT).toBeGreaterThan(720);
-    expect(WORLD_WIDTH / WORLD_HEIGHT).toBeCloseTo(1280 / 720, 5);
+    expect(WORLD_WIDTH / WORLD_HEIGHT).toBeGreaterThan(1280 / 720); // wider than the viewport's aspect - the camera scrolls sideways
   });
 });

@@ -1,14 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createMatchRuntime, stepMatch, WEAPON_KEYS, cycleWeapon } from '../src/matchLoop.js';
+import { createMatchRuntime, defaultMatchSetup, stepMatch, WEAPON_KEYS, cycleWeapon } from '../src/matchLoop.js';
 import { createTerrain } from '../src/terrain.js';
-import { createWorm, takeDamage } from '../src/worm.js';
+import { createWorm, takeDamage, applyDirectionalKnockback } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
-import type { InputState, Team, MatchRuntime } from '../src/types.js';
+import { createProjectile } from '../src/projectile.js';
+import type { InputState, Team, MatchRuntime, MatchSetup } from '../src/types.js';
 import {
   STARTING_HP,
   TURN_BANNER_DURATION_MS,
   SHOTGUN_TRACER_DURATION,
   DEATH_ANIM_DURATION_MS,
+  MELEE_KNOCKBACK_SPEED,
+  MELEE_KNOCKBACK_LIFT,
+  MELEE_KNOCKBACK_DURATION,
 } from '../src/constants.js';
 import { WEAPONS } from '../src/weapons.js';
 
@@ -68,11 +72,11 @@ function fourWormTeams(): Team[] {
 }
 
 describe('createMatchRuntime', () => {
-  it('builds two teams of two worms each on fresh terrain with empty runtime state', () => {
+  it('builds two teams of three worms each on fresh terrain with empty runtime state', () => {
     const rt = createMatchRuntime(960, 540);
     expect(rt.teams).toHaveLength(2);
-    expect(rt.teams[0].worms).toHaveLength(2);
-    expect(rt.teams[1].worms).toHaveLength(2);
+    expect(rt.teams[0].worms).toHaveLength(3);
+    expect(rt.teams[1].worms).toHaveLength(3);
     expect(rt.projectiles).toEqual([]);
     expect(rt.rope).toBeNull();
     expect(rt.charging).toBe(false);
@@ -89,22 +93,59 @@ describe('createMatchRuntime', () => {
     expect(rt.teams[1].name).toBe('Team 2');
   });
 
-  it('uses the given team names when provided', () => {
-    const rt = createMatchRuntime(960, 540, 'Sharks', 'Jets');
-    expect(rt.teams[0].name).toBe('Sharks');
-    expect(rt.teams[1].name).toBe('Jets');
-  });
-
-  it('defaults worm names to "W1"-"W4" when none are given', () => {
+  it('defaults worm names to "Worm 1"-"Worm 6", numbered across teams, when none are given', () => {
     const rt = createMatchRuntime(960, 540);
-    expect(rt.teams[0].worms.map((w) => w.name)).toEqual(['W1', 'W2']);
-    expect(rt.teams[1].worms.map((w) => w.name)).toEqual(['W3', 'W4']);
+    expect(rt.teams[0].worms.map((w) => w.name)).toEqual(['Worm 1', 'Worm 2', 'Worm 3']);
+    expect(rt.teams[1].worms.map((w) => w.name)).toEqual(['Worm 4', 'Worm 5', 'Worm 6']);
   });
 
-  it('uses the given worm names when provided', () => {
-    const rt = createMatchRuntime(960, 540, 'Sharks', 'Jets', ['Zack', 'Wilfred', 'Gravy', 'Brain']);
-    expect(rt.teams[0].worms.map((w) => w.name)).toEqual(['Zack', 'Wilfred']);
-    expect(rt.teams[1].worms.map((w) => w.name)).toEqual(['Gravy', 'Brain']);
+  function fourTeamSetup(overrides: Partial<MatchSetup> = {}): MatchSetup {
+    return {
+      teams: [
+        { name: 'Sharks', wormNames: ['Zack', 'Wilfred', 'Gravy'] },
+        { name: 'Jets', wormNames: ['Brain', 'Nib', 'Pip'] },
+        { name: 'Owls', wormNames: ['O1', 'O2', 'O3'] },
+        { name: 'Cats', wormNames: ['C1', 'C2', 'C3'] },
+      ],
+      startingHp: 150,
+      turnDurationMs: 45000,
+      ...overrides,
+    };
+  }
+
+  it('builds one team per setup entry, with ids p1-p4 and the given team/worm names', () => {
+    const rt = createMatchRuntime(1920, 540, fourTeamSetup());
+    expect(rt.teams.map((t) => t.playerId)).toEqual(['p1', 'p2', 'p3', 'p4']);
+    expect(rt.teams.map((t) => t.name)).toEqual(['Sharks', 'Jets', 'Owls', 'Cats']);
+    expect(rt.teams[0].worms.map((w) => w.name)).toEqual(['Zack', 'Wilfred', 'Gravy']);
+    expect(rt.teams[3].worms.map((w) => w.name)).toEqual(['C1', 'C2', 'C3']);
+    for (const team of rt.teams) {
+      for (const worm of team.worms) expect(worm.team).toBe(team.playerId);
+    }
+  });
+
+  it('gives every worm its own spawn column', () => {
+    const rt = createMatchRuntime(1920, 540, fourTeamSetup());
+    const xs = rt.teams.flatMap((t) => t.worms.map((w) => w.x));
+    expect(xs).toHaveLength(12);
+    expect(new Set(xs).size).toBe(12);
+  });
+
+  it('starts every worm at the chosen health and every turn at the chosen length', () => {
+    const rt = createMatchRuntime(1920, 540, fourTeamSetup({ startingHp: 50, turnDurationMs: 30000 }));
+    for (const worm of rt.teams.flatMap((t) => t.worms)) {
+      expect(worm.hp).toBe(50);
+      expect(worm.maxHp).toBe(50);
+    }
+    expect(rt.match.turnTimeRemaining).toBe(30000);
+    expect(rt.match.turnDurationMs).toBe(30000);
+  });
+
+  it('defaultMatchSetup is two teams of three at the default health and turn length', () => {
+    const setup = defaultMatchSetup();
+    expect(setup.teams).toHaveLength(2);
+    expect(setup.teams.every((t) => t.wormNames.length === 3)).toBe(true);
+    expect(setup.startingHp).toBe(STARTING_HP);
   });
 });
 
@@ -255,7 +296,7 @@ describe('stepMatch retirement timer', () => {
   it('waits for all projectiles to settle before advancing the turn', () => {
     const rt = makeRuntime(twoWormTeams());
     rt.retirementTimer = 0.01;
-    rt.projectiles = [{ weaponKey: 'bazooka', x: 10, y: 10, vx: 0, vy: 0, fuseRemaining: null, alive: true }];
+    rt.projectiles = [{ weaponKey: 'bazooka', x: 10, y: 10, vx: 0, vy: 0, fuseRemaining: null, lifetimeRemaining: null, alive: true }];
     const input = makeInput();
     const beforeIndex = rt.match.currentIndex;
 
@@ -362,6 +403,18 @@ describe('stepMatch clears the rope when the turn advances', () => {
     stepMatch(rt, makeInput(), 0.016); // worm B's first real frame - must not swing on a stale rope
 
     expect(Math.hypot(wormB.x - beforeX, wormB.y - beforeY)).toBeLessThan(5);
+  });
+
+  it('clears any in-progress bat knockback so it cannot carry into the next turn', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const victim = rt.teams[1].worms[0];
+    applyDirectionalKnockback(victim, 1, MELEE_KNOCKBACK_SPEED, MELEE_KNOCKBACK_LIFT, MELEE_KNOCKBACK_DURATION);
+    expect(victim.knockbackTimer).not.toBeNull();
+
+    stepMatch(rt, makeInput({ endTurnRequested: true }), 0.016); // turn advances to the victim itself
+
+    expect(rt.match.currentIndex).toBe(1);
+    expect(victim.knockbackTimer).toBeNull(); // it starts its turn controllable, not still mid-shove
   });
 });
 
@@ -684,7 +737,7 @@ describe('stepMatch baseball bat', () => {
     const swinger = rt.teams[0].worms[0];
     const target = rt.teams[1].worms[0];
     swinger.facing = 1;
-    target.x = swinger.x + 500; // far beyond range
+    target.x = swinger.x + 100; // still well beyond the bat's 55px reach, but a real in-map position
     const batIndex = WEAPON_KEYS.indexOf('bat') + 1;
     const input = makeInput({ firing: true, selectedWeapon: batIndex });
 
@@ -695,7 +748,7 @@ describe('stepMatch baseball bat', () => {
 });
 
 describe('WEAPON_KEYS', () => {
-  it('lists all ten original weapons plus the three newest at the end', () => {
+  it('lists all ten original weapons plus the four newest at the end', () => {
     expect(WEAPON_KEYS).toEqual([
       'bazooka',
       'grenade',
@@ -710,6 +763,7 @@ describe('WEAPON_KEYS', () => {
       'homingMissile',
       'clusterBomb',
       'bat',
+      'steelStructure',
     ]);
   });
 });
@@ -908,6 +962,16 @@ describe('health crates', () => {
     expect(worm.hp).toBe(STARTING_HP);
   });
 
+  it('caps healing at the worm\'s own max HP when the match uses a custom starting health', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const worm = rt.teams[0].worms[0];
+    worm.maxHp = 50;
+    worm.hp = 40;
+    rt.crates = [{ x: worm.x, y: worm.y, vy: 0, landed: true }];
+    stepMatch(rt, makeInput(), 1 / 60);
+    expect(worm.hp).toBe(50);
+  });
+
   it('leaves a landed crate on the map until a worm actually reaches it', () => {
     const rt = makeRuntime(twoWormTeams());
     rt.crates = [{ x: 100, y: 149, vy: 0, landed: true }]; // 50px from both worms, outside pickup range
@@ -1038,6 +1102,43 @@ describe('stepMatch homing missile', () => {
     expect(rt.projectiles[0].weaponKey).toBe('homingMissile');
     expect(rt.teams[0].ammo!.homingMissile).toBe(1);
   });
+
+  it('hands the picked homing target to the fired missile and clears it when the turn ends', () => {
+    const rt = makeRuntime(twoWormTeams());
+    rt.homingTarget = { x: 120, y: 40 };
+    const input = makeInput({ firing: true, selectedWeapon: WEAPON_KEYS.indexOf('homingMissile') + 1 });
+
+    stepMatch(rt, input, 0.2); // charge
+    input.firing = false;
+    stepMatch(rt, input, 0.016); // release - fires
+
+    expect(rt.projectiles[0].target).toEqual({ x: 120, y: 40 });
+
+    input.endTurnRequested = true;
+    stepMatch(rt, input, 0.016);
+    expect(rt.homingTarget).toBeNull();
+  });
+
+  it('clears a missile that can never hit anything out of rt.projectiles instead of stalling the match', () => {
+    // rt.projectiles is never emptied on turn advance, so a projectile that
+    // never terminates would block the retirement path (which waits for
+    // rt.projectiles.length === 0) for the rest of the match. A missile fired
+    // straight up with no enemy alive to steer toward is exactly that case:
+    // it has no gravity to bring it back down, touches no terrain, and the
+    // out-of-bounds cull has no ceiling on -y. Only maxLifetime can end it.
+    const teams = twoWormTeams();
+    teams[1].worms[0].alive = false;
+    const rt = makeRuntime(teams);
+    const shooter = teams[0].worms[0];
+    rt.projectiles = [createProjectile('homingMissile', shooter.x, shooter.y, -Math.PI / 2, 1, shooter)];
+    const input = makeInput();
+
+    let ticks = 0;
+    for (; ticks < 600 && rt.projectiles.length > 0; ticks++) stepMatch(rt, input, 1 / 60);
+
+    expect(rt.projectiles).toHaveLength(0);
+    expect(ticks).toBeLessThan(400); // ~6s maxLifetime plus the tick that prunes the dead projectile
+  });
 });
 
 describe('stepMatch cluster bomb', () => {
@@ -1054,14 +1155,18 @@ describe('stepMatch cluster bomb', () => {
     expect(rt.projectiles.filter((p) => p.weaponKey === 'clusterBomb')).toHaveLength(1);
     expect(rt.projectiles.filter((p) => p.weaponKey === 'clusterFragment')).toHaveLength(0);
 
-    let detonated = false;
-    for (let i = 0; i < 20 && !detonated; i++) {
+    // Stop on the very tick the fragments first appear. (Watching for the
+    // parent to disappear instead would overshoot by a tick: the detonated
+    // parent stays in rt.projectiles, dead, until the next tick prunes it.)
+    let spawnedThisTick = false;
+    for (let i = 0; i < 20 && !spawnedThisTick; i++) {
       stepMatch(rt, input, 1 / 60);
-      detonated = rt.projectiles.every((p) => p.weaponKey !== 'clusterBomb');
+      spawnedThisTick = rt.projectiles.some((p) => p.weaponKey === 'clusterFragment');
     }
 
     const fragments = rt.projectiles.filter((p) => p.weaponKey === 'clusterFragment');
     expect(fragments).toHaveLength(5);
+    expect(new Set(fragments.map((f) => `${f.x},${f.y}`)).size).toBe(1); // all spawned at the identical point - proves none of them ticked yet
     const yRightAfterSpawn = fragments[0].y;
 
     stepMatch(rt, input, 1 / 60);
@@ -1075,6 +1180,8 @@ describe('createMatchRuntime limited-weapon ammo', () => {
     const rt = createMatchRuntime(960, 540);
     expect(rt.teams[0].ammo?.airstrikeRocket).toBe(1);
     expect(rt.teams[0].ammo?.holyHandGrenade).toBe(2);
+    expect(rt.teams[0].ammo?.homingMissile).toBe(2);
+    expect(rt.teams[0].ammo?.clusterBomb).toBe(2);
     expect(rt.teams[1].ammo?.airstrikeRocket).toBe(1);
     expect(rt.teams[1].ammo?.holyHandGrenade).toBe(2);
     rt.teams[0].ammo!.airstrikeRocket = 0;

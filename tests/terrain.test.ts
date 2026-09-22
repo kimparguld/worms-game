@@ -6,6 +6,7 @@ import {
   carveCircle,
   findSurfaceY,
   countPlacedBranchesForTest,
+  waterLevelY,
 } from '../src/terrain.js';
 
 describe('generateSilhouetteMask', () => {
@@ -147,6 +148,16 @@ describe('generateSilhouetteMask branches density', () => {
   // terrain.ts for this purpose) instead of an emergent signature shared
   // with other landforms, so it fails immediately if branch placement
   // regresses or disappears.
+  //
+  // Pinned to a random 4-column spawn layout (the count these thresholds
+  // were tuned at): the default is now one column per worm, and 6+ columns
+  // crowd a small 960px map far more than the real 4480px world, where
+  // branches stay at ~3-5/map even with 12 worms.
+  function randomFourSpawnLayout(): number[] {
+    const slot = 0.84 / 4;
+    return [0, 1, 2, 3].map((i) => 0.08 + i * slot + slot * (0.15 + Math.random() * 0.7));
+  }
+
   it('places a mean branch count well above the pre-fix ~1.1/map baseline, with few zero-branch maps', () => {
     const width = 960,
       height = 540;
@@ -154,7 +165,7 @@ describe('generateSilhouetteMask branches density', () => {
     let total = 0;
     let zeroBranchMaps = 0;
     for (let attempt = 0; attempt < attempts; attempt++) {
-      const count = countPlacedBranchesForTest(width, height);
+      const count = countPlacedBranchesForTest(width, height, randomFourSpawnLayout());
       total += count;
       if (count === 0) zeroBranchMaps++;
     }
@@ -459,14 +470,35 @@ describe('generateSilhouetteMask has more buildings', () => {
 });
 
 describe('createTerrain spawn/decoration metadata', () => {
-  it('picks 4 spawn fractions spread across the map, clear of the edges', () => {
+  it('picks one spawn fraction per worm (6 by default) spread across the map, clear of the edges', () => {
     const terrain = createTerrain(960, 540);
-    expect(terrain.spawnFractions).toHaveLength(4);
+    expect(terrain.spawnFractions).toHaveLength(6);
     for (const f of terrain.spawnFractions) {
       expect(f).toBeGreaterThan(0.05);
       expect(f).toBeLessThan(0.95);
     }
   });
+
+  it('keeps every spawn column clear with 4 full teams (12 worms) on the real world size', () => {
+    const width = 4480,
+      height = 1260;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const terrain = createTerrain(width, height, 12);
+      expect(terrain.spawnFractions).toHaveLength(12);
+      const surfaceTop = (x: number) => {
+        for (let y = 0; y < height; y++) if (terrain.mask[y * width + x] !== 0) return y;
+        return height;
+      };
+      for (const fraction of terrain.spawnFractions) {
+        const x = Math.round(fraction * width);
+        const top = surfaceTop(x);
+        expect(terrain.mask[top * width + x]).toBe(1); // natural ground, not a building
+        expect(top).toBeLessThan(waterLevelY(terrain)); // not dropped in a lake
+        expect(Math.abs(top - surfaceTop(x - 1))).toBeLessThan(height * 0.05);
+        expect(Math.abs(top - surfaceTop(x + 1))).toBeLessThan(height * 0.05);
+      }
+    }
+  }, 30000);
 
   it('varies the spawn fractions across matches (not a fixed layout)', () => {
     const a = createTerrain(960, 540).spawnFractions;

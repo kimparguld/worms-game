@@ -1,8 +1,8 @@
 import { integrateProjectile, calcDamage, WEAPONS, applyHoming } from './weapons.js';
 import { isSolid, carveCircle } from './terrain.js';
 import { takeDamage, applyExplosionKnockback } from './worm.js';
-import { GRAVITY } from './constants.js';
-import type { Terrain, Worm, WeaponDef, WeaponKey, Projectile, ProjectileUpdateResult } from './types.js';
+import { GRAVITY, WORM_HIT_RADIUS } from './constants.js';
+import type { Terrain, Worm, WeaponDef, WeaponKey, Projectile, ProjectileUpdateResult, Vector2 } from './types.js';
 
 export function createProjectile(
   weaponKey: WeaponKey,
@@ -21,15 +21,23 @@ export function createProjectile(
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
     fuseRemaining: def.fuseTime,
+    lifetimeRemaining: def.maxLifetime ?? null,
     alive: true,
     owner,
   };
 }
 
-// Radius (px) within which a projectile counts as touching a worm - roughly
-// a worm's body width, matching the hit radius raycastHit uses for the
-// shotgun's hitscan pellets.
-const WORM_HIT_RADIUS = 10;
+// How close (px) a homing missile must pass to its player-picked target
+// point to detonate there - same as a direct worm hit.
+const HOMING_TARGET_HIT_RADIUS = 10;
+
+function distanceToSegment(point: Vector2, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = dx * dx + dy * dy;
+  const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - ax) * dx + (point.y - ay) * dy) / lengthSq));
+  return Math.hypot(point.x - (ax + dx * t), point.y - (ay + dy * t));
+}
 
 type PathCollision =
   | { type: 'terrain'; x: number; y: number; safeX: number; safeY: number }
@@ -84,25 +92,31 @@ export function updateProjectile(
     projectile.fuseRemaining -= dt;
   }
 
+  if (projectile.lifetimeRemaining != null) {
+    projectile.lifetimeRemaining -= dt;
+  }
+
   const prevX = projectile.x;
   const prevY = projectile.y;
 
   if (def.homing && projectile.owner) {
-    let target: Worm | undefined;
-    let bestDistance = Infinity;
-    for (const w of worms) {
-      if (!w.alive || w.dying || w.team === projectile.owner.team) continue;
-      const distance = Math.hypot(w.x - projectile.x, w.y - projectile.y);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        target = w;
+    let target: Vector2 | undefined = projectile.target;
+    if (!target) {
+      let bestDistance = Infinity;
+      for (const w of worms) {
+        if (!w.alive || w.dying || w.team === projectile.owner.team) continue;
+        const distance = Math.hypot(w.x - projectile.x, w.y - projectile.y);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          target = { x: w.x, y: w.y };
+        }
       }
     }
     if (target) {
       const steered = applyHoming(
         { x: projectile.vx, y: projectile.vy },
         { x: projectile.x, y: projectile.y },
-        { x: target.x, y: target.y },
+        target,
         dt,
       );
       projectile.vx = steered.x;
@@ -145,6 +159,23 @@ export function updateProjectile(
   if (collision) {
     projectile.x = collision.x;
     projectile.y = collision.y;
+  }
+
+  // Termination backstop (see WeaponDef.maxLifetime): a projectile that has
+  // used up its flight time detonates where it is, whatever else is going on.
+  // Checked ahead of the fuse branch so it can't be starved by a weapon that
+  // is fuse-based too, and skipped entirely (lifetimeRemaining === null) for
+  // every weapon that doesn't set maxLifetime.
+  // A player-picked homing target may be open air, which the missile would
+  // otherwise circle until its lifetime ran out - reaching it counts as a hit.
+  // Measured against this tick's whole path, not just its end point, since a
+  // slow frame can carry the missile past the point in a single step.
+  const reachedTarget =
+    projectile.target != null &&
+    distanceToSegment(projectile.target, prevX, prevY, projectile.x, projectile.y) <= HOMING_TARGET_HIT_RADIUS;
+  if (reachedTarget || (projectile.lifetimeRemaining != null && projectile.lifetimeRemaining <= 0)) {
+    const spawned = explode(projectile, terrain, worms, def);
+    return { exploded: true, spawned };
   }
 
   if (isFuseBased) {
@@ -209,6 +240,7 @@ function explode(projectile: Projectile, terrain: Terrain, worms: Worm[], def: W
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       fuseRemaining: WEAPONS.clusterFragment.fuseTime,
+      lifetimeRemaining: WEAPONS.clusterFragment.maxLifetime ?? null,
       alive: true,
       owner: projectile.owner,
     });

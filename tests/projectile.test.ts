@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createProjectile, updateProjectile } from '../src/projectile.js';
 import { createTerrain } from '../src/terrain.js';
+import { WEAPONS } from '../src/weapons.js';
 import { createWorm } from '../src/worm.js';
 import type { Terrain, ProjectileUpdateResult } from '../src/types.js';
 
@@ -149,7 +150,106 @@ describe('updateProjectile', () => {
     }
 
     expect(projectile.vy).toBeGreaterThan(0); // turned downward, toward the target
-    expect(Math.hypot(projectile.vx, projectile.vy)).toBeCloseTo(700, 0); // speed preserved (homingMissile has no gravity/wind)
+    expect(Math.hypot(projectile.vx, projectile.vy)).toBeCloseTo(WEAPONS.homingMissile.maxSpeed, 0); // speed preserved (homingMissile has no gravity/wind)
+  });
+
+  it('always detonates a full-charge homing missile via convergence (not just a lifetime backstop), regardless of initial bearing error', () => {
+    const terrain = flatTerrain(4000, 4000, 3900); // ground far below - stays airborne long enough to converge or fail
+    const bearings = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4, Math.PI * 0.99];
+    for (const bearing of bearings) {
+      const shooter = createWorm(2000, 2000, 'p1', 'Shooter');
+      const target = createWorm(2000 + Math.cos(bearing) * 400, 2000 + Math.sin(bearing) * 400, 'p2', 'Target');
+      const projectile = createProjectile('homingMissile', shooter.x, shooter.y, 0, 1, shooter); // fired flat (+x) regardless of where the target actually is
+      let result: ProjectileUpdateResult | undefined;
+      let ticks = 0;
+      for (; ticks < 600 && !(result && result.exploded); ticks++) {
+        result = updateProjectile(projectile, terrain, [shooter, target], 0, 1 / 60);
+      }
+      expect(result!.exploded).toBe(true);
+      expect(ticks).toBeLessThan(300); // converged well inside the lifetime backstop below - proves the tuning itself works, not just the backstop
+    }
+  });
+
+  it('gives the homing missile a lifetime backstop that forces detonation even without a target', () => {
+    const terrain = flatTerrain(400, 400, 390);
+    const shooter = createWorm(200, 380, 'p1', 'Shooter');
+    // Fired straight up, with no enemy worm anywhere: homingMissile has no
+    // gravity so it never arcs back down onto the ground, and the
+    // out-of-bounds cull deliberately has no ceiling on -y (see
+    // updateProjectile). Nothing but the lifetime backstop can end this
+    // shot - which keeps this test independent of the homing tuning.
+    const projectile = createProjectile('homingMissile', shooter.x, shooter.y, -Math.PI / 2, 1, shooter);
+    let result: ProjectileUpdateResult | undefined;
+    for (let i = 0; i < 400; i++) { // 400/60 ≈ 6.67s, past the 6s maxLifetime
+      result = updateProjectile(projectile, terrain, [shooter], 0, 1 / 60); // no enemy worm at all - flies dead straight, never converges, must still stop
+      if (result.exploded) break;
+    }
+    expect(result!.exploded).toBe(true);
+  });
+
+  it('curves toward the enemy worm even when a friendly worm is closer', () => {
+    const terrain = flatTerrain(2000, 2000, 1900);
+    const shooter = createWorm(0, 0, 'p1', 'Shooter');
+    const friendly = createWorm(50, 10, 'p1', 'Friendly'); // closer, but same team - must be ignored
+    const enemy = createWorm(300, 300, 'p2', 'Enemy');
+    const projectile = createProjectile('homingMissile', 0, 0, 0, 1, shooter);
+
+    for (let i = 0; i < 10; i++) {
+      updateProjectile(projectile, terrain, [shooter, friendly, enemy], 0, 1 / 60);
+    }
+
+    expect(projectile.vy).toBeGreaterThan(0); // still curving toward the enemy (down-right), not toward the closer friendly
+  });
+
+  it('steers toward a player-picked target point instead of the nearest enemy', () => {
+    const terrain = flatTerrain(2000, 2000, 1900);
+    const shooter = createWorm(500, 500, 'p1', 'Shooter');
+    const enemy = createWorm(800, 800, 'p2', 'Enemy'); // down-right - would pull the missile down
+    const projectile = createProjectile('homingMissile', 500, 500, 0, 1, shooter);
+    projectile.target = { x: 800, y: 200 }; // up-right
+
+    for (let i = 0; i < 10; i++) {
+      updateProjectile(projectile, terrain, [shooter, enemy], 0, 1 / 60);
+    }
+
+    expect(projectile.vy).toBeLessThan(0); // turned up, toward the picked point, not down toward the enemy
+  });
+
+  it('detonates on reaching a target point in open air instead of circling it', () => {
+    const terrain = flatTerrain(2000, 2000, 1900);
+    const shooter = createWorm(500, 500, 'p1', 'Shooter');
+    const projectile = createProjectile('homingMissile', 500, 500, 0, 1, shooter);
+    projectile.target = { x: 700, y: 400 };
+    let result: ProjectileUpdateResult | undefined;
+    let ticks = 0;
+    for (; ticks < 600 && !(result && result.exploded); ticks++) {
+      result = updateProjectile(projectile, terrain, [shooter], 0, 1 / 60);
+    }
+    expect(result!.exploded).toBe(true);
+    expect(ticks).toBeLessThan(120); // well before the 6s lifetime backstop
+    expect(Math.hypot(projectile.x - 700, projectile.y - 400)).toBeLessThan(15);
+  });
+
+  it('still detonates at the target point when one slow frame carries it past', () => {
+    const terrain = flatTerrain(2000, 2000, 1900);
+    const shooter = createWorm(0, 0, 'p1', 'Shooter');
+    const projectile = createProjectile('homingMissile', 500, 500, 0, 1, shooter);
+    projectile.target = { x: 510, y: 500 }; // straight ahead, 10px - a 0.05s tick moves 22px
+    const result = updateProjectile(projectile, terrain, [shooter], 0, 0.05);
+    expect(result.exploded).toBe(true);
+  });
+
+  it('flies straight with no steering when no living enemy worm exists', () => {
+    const terrain = flatTerrain(2000, 2000, 1900);
+    const shooter = createWorm(0, 0, 'p1', 'Shooter');
+    const projectile = createProjectile('homingMissile', 0, 0, 0, 1, shooter);
+
+    for (let i = 0; i < 10; i++) {
+      updateProjectile(projectile, terrain, [shooter], 0, 1 / 60); // no enemy worm in the array at all
+    }
+
+    expect(projectile.vy).toBe(0); // no target found - never steered, still flying dead level
+    expect(projectile.vx).toBeGreaterThan(0);
   });
 });
 

@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import type { Worm, Team, Terrain, WeaponKey } from '../types.js';
 import { wormAnimationState } from './wormAnimationState.js';
 import { TEAM_COLORS, deathWiggleRotation, deathWiggleScale } from '../render.js';
-import { DEATH_ANIM_DURATION_MS, STARTING_HP, WORM_RENDER_SCALE } from '../constants.js';
+import { DEATH_ANIM_DURATION_MS, WORM_RENDER_SCALE } from '../constants.js';
 
 // Fraction of the death animation spent on the wiggle clip before the sprite
 // hides and EffectsRenderer's poof burst takes over - matches the old
@@ -123,7 +123,7 @@ export class WormRenderer {
       this.weaponImage.setVisible(false);
     }
 
-    const hpFraction = Math.max(0, worm.hp / STARTING_HP);
+    const hpFraction = Math.max(0, worm.hp / worm.maxHp);
     const barX = worm.x - HP_BAR_WIDTH / 2;
     const barY = worm.y - HP_BAR_Y_OFFSET;
     this.hpBarFrame.setPosition(worm.x, barY).setVisible(true);

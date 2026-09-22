@@ -1,4 +1,3 @@
-import { WORLD_WIDTH } from './constants.js';
 import { computeAllowedIntervals, sampleFromIntervals, TOP_CLEARANCE_FRACTION } from './intervalSampling.js';
 import type { TerrainDecoration } from './types.js';
 
@@ -376,7 +375,12 @@ const CATEGORIES: DecorationCategory[] = [
   { props: FLOWER_PROPS, countRange: [14, 22], heightRange: [16, 30], flippable: false },
 ];
 
-const BASELINE_WORLD_WIDTH = WORLD_WIDTH;
+// The 16:9 map size these counts/sizes were tuned at. Prop *size* follows
+// the map's height and prop *count* follows its width, so a map that's only
+// wider (not taller) gets more scenery at the same scale - on a 16:9 map
+// the two ratios are equal, as before.
+const BASELINE_WORLD_WIDTH = 2240;
+const BASELINE_WORLD_HEIGHT = 1260;
 // Extra breathing room added on top of the widest possible stamped
 // footprint (see spawnClearancePxFor) so a worm's spawn point isn't right up
 // against the edge of an obstacle either.
@@ -668,7 +672,8 @@ export function generateDecorations(
   spawnFractions: number[],
 ): TerrainDecoration[] {
   const lowGroundY = height * LOW_GROUND_FRACTION;
-  const sizeScale = width / BASELINE_WORLD_WIDTH;
+  const sizeScale = height / BASELINE_WORLD_HEIGHT;
+  const countScale = width / BASELINE_WORLD_WIDTH;
   const spawnClearancePx = maxFootprintHalfWidth(sizeScale) + SPAWN_CLEARANCE_MARGIN_PX * sizeScale;
   // Precomputed once: every x this map's spawn columns rule out, at the
   // widest possible footprint half-width any category could need. Sampling
@@ -703,7 +708,7 @@ export function generateDecorations(
 
   const decorations: TerrainDecoration[] = [];
   for (const category of CATEGORIES) {
-    const count = Math.round(randomInt(...category.countRange) * sizeScale);
+    const count = Math.round(randomInt(...category.countRange) * countScale);
     for (let i = 0; i < count; i++) {
       let placed = false;
       for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS && !placed; attempt++) {

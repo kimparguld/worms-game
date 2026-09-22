@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import type { Terrain } from '../types.js';
+import type { SteelStructure, Terrain } from '../types.js';
+import { STEEL_STRUCTURE_ART } from '../structures.js';
 import { facadeVariantIndex } from './facadeVariant.js';
 import { DEPTH_BACKDROP } from '../render.js';
 
@@ -243,6 +244,32 @@ export class TerrainRenderer {
       }
     }
     return runs;
+  }
+
+  // Paints a newly placed girder into the decoration art layer. Its
+  // collision was already stamped into terrain.decorationMask (see
+  // structures.ts), so the next dirty update reveals it through the same
+  // mask as every other decoration - and explosions erode it the same way.
+  addStructure(scene: Phaser.Scene, structure: SteelStructure): void {
+    const source = scene.textures.get('steelStructure_placed').getSourceImage() as CanvasImageSource;
+    const { cropX, cropY, cropWidth, cropHeight } = STEEL_STRUCTURE_ART;
+    const ctx = this.decorationArtTexture.context;
+    ctx.save();
+    ctx.translate(structure.x, structure.y);
+    ctx.rotate(structure.rotation);
+    ctx.drawImage(
+      source,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      -structure.length / 2,
+      -structure.thickness / 2,
+      structure.length,
+      structure.thickness,
+    );
+    ctx.restore();
+    this.decorationArtTexture.refresh();
   }
 
   update(terrain: Terrain): void {

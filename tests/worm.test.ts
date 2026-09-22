@@ -8,7 +8,13 @@ import {
   applyExplosionKnockback,
   applyDirectionalKnockback,
 } from '../src/worm.js';
-import { DEATH_ANIM_DURATION_MS, EXPLOSION_KNOCKBACK_PER_DAMAGE, WORM_MOVE_SPEED } from '../src/constants.js';
+import {
+  DEATH_ANIM_DURATION_MS,
+  EXPLOSION_KNOCKBACK_PER_DAMAGE,
+  WORM_MOVE_SPEED,
+  MELEE_KNOCKBACK_SPEED,
+  MELEE_KNOCKBACK_DURATION,
+} from '../src/constants.js';
 import { createTerrain } from '../src/terrain.js';
 import type { Terrain, WormInput } from '../src/types.js';
 
@@ -221,5 +227,20 @@ describe('updateWormPhysics knockback', () => {
     updateWormPhysics(worm, terrain, input, 0.06); // outlasts the 0.05s knockback window
     expect(worm.knockbackTimer).toBeNull();
     expect(Math.abs(worm.vx)).toBeLessThanOrEqual(WORM_MOVE_SPEED);
+  });
+
+  it('does not tunnel through a thin wall while knocked back at high speed', () => {
+    const width = 200, height = 100;
+    const terrain = createTerrain(width, height);
+    terrain.mask.fill(0);
+    terrain.decorationMask.fill(0);
+    for (let x = 100; x < 106; x++) { // a thin (6px) vertical wall directly ahead
+      for (let y = 0; y < height; y++) terrain.mask[y * width + x] = 1;
+    }
+    const worm = createWorm(90, 50, 'p1', 'A');
+    applyDirectionalKnockback(worm, 1, MELEE_KNOCKBACK_SPEED, 0, MELEE_KNOCKBACK_DURATION);
+    updateWormPhysics(worm, terrain, { left: false, right: false, jump: false }, 0.05); // the engine's own dt ceiling
+
+    expect(worm.x).toBeLessThan(100); // stopped short of the wall, not teleported through it
   });
 });

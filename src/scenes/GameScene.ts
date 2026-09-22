@@ -1,5 +1,12 @@
 import Phaser from 'phaser';
-import { createMatchRuntime, stepMatch, WEAPON_KEYS, cycleWeapon } from '../matchLoop.js';
+import { createMatchRuntime, defaultMatchSetup, stepMatch, WEAPON_KEYS, cycleWeapon, tryPlaceStructure } from '../matchLoop.js';
+import {
+  STEEL_STRUCTURE_ART,
+  STRUCTURE_PLACE_RANGE,
+  createStructure,
+  isStructurePlacementValid,
+  structureRotation,
+} from '../structures.js';
 import { checkWinner, currentWorm } from '../game.js';
 import {
   updateHud,
@@ -8,12 +15,17 @@ import {
   turnBannerLabel,
   weaponLabel,
   teamHealthBarX,
+  teamHudRowOffset,
   TEAM_BAR_WIDTH,
   teamColorCss,
   tracerAlpha,
   chargeBarLength,
   chargeBarColor,
   DEPTH_BACKDROP,
+  clampCameraCenter,
+  cameraZoomLimits,
+  zoomAnchoredCenter,
+  edgeScrollDirection,
 } from '../render.js';
 import { sharedInput } from '../inputState.js';
 import { resetInputState } from '../input.js';
@@ -21,15 +33,14 @@ import {
   TURN_BANNER_DURATION_MS,
   WORLD_WIDTH,
   WORLD_HEIGHT,
-  DEFAULT_WORM_NAMES,
   DEATH_ANIM_DURATION_MS,
   SHOTGUN_TRACER_DURATION,
   WORM_RENDER_SCALE,
 } from '../constants.js';
-import { WEAPONS } from '../weapons.js';
+import { WEAPONS, raycastHit } from '../weapons.js';
 import { soundSystem } from '../sound.js';
 import { aimWormAtPoint, isMobileDevice } from '../mobile.js';
-import type { Worm, MatchRuntime } from '../types.js';
+import type { Worm, MatchRuntime, MatchSetup } from '../types.js';
 import { TerrainRenderer } from '../render/TerrainRenderer.js';
 import { WaterRenderer } from '../render/WaterRenderer.js';
 import { WormRenderer } from '../render/WormRenderer.js';
@@ -37,12 +48,11 @@ import { ProjectileRenderer } from '../render/ProjectileRenderer.js';
 import { CrateRenderer } from '../render/CrateRenderer.js';
 import { EffectsRenderer } from '../render/EffectsRenderer.js';
 import { HudRenderer } from '../render/HudRenderer.js';
+import { WeaponPicker } from '../render/WeaponPicker.js';
 import { ASSET_MANIFEST } from '../assetManifest.js';
 
 interface GameSceneData {
-  team1Name?: string;
-  team2Name?: string;
-  wormNames?: [string, string, string, string];
+  setup?: MatchSetup;
 }
 
 const MOBILE_WORM_DRAG_RADIUS = 96;
@@ -51,12 +61,24 @@ const MOBILE_MOVEMENT_ZONE_MIN_Y_FRACTION = 0.45;
 const MOBILE_MOVE_DEAD_ZONE = 18;
 const MOBILE_JUMP_DRAG_DISTANCE = 42;
 const MOBILE_JUMP_PULSE_MS = 140;
+// Horizontal camera scrolling. Speeds are in screen px, converted to world
+// px through the zoom so scrolling feels the same at any zoom level.
+const CAMERA_FOLLOW_RATE = 5; // 1/s - how quickly auto-follow catches up with its target
+const EDGE_SCROLL_MARGIN = 36; // px from the left/right screen edge that starts edge scrolling
+const EDGE_SCROLL_SPEED = 900; // screen px/s
+// Per wheel delta unit: a typical 100-unit notch zooms by ~14%.
+const WHEEL_ZOOM_SENSITIVITY = 0.0015;
+const ZOOM_RESET_RATE = 4; // 1/s - how quickly the zoom eases back to default on a new turn
+const EDGE_ARROW_ALPHA = 0.5;
+const EDGE_ARROW_FADE_RATE = 10; // 1/s - how fast the edge arrows fade in/out
+// Edge scrolling is ignored while the pointer is up in the HUD strip, so
+// reaching for the team bars near a corner doesn't drag the map along.
+const EDGE_SCROLL_MIN_Y = 110;
+const SKY_PARALLAX_OVERSCAN = 1.2; // sky is this much wider than the view, so it has room to drift
 
 export class GameScene extends Phaser.Scene {
   private rt!: MatchRuntime;
-  private team1Name = 'Team 1';
-  private team2Name = 'Team 2';
-  private wormNames: [string, string, string, string] = DEFAULT_WORM_NAMES;
+  private setup: MatchSetup = defaultMatchSetup();
 
   private terrainRenderer!: TerrainRenderer;
   private waterRenderer!: WaterRenderer;
@@ -75,9 +97,29 @@ export class GameScene extends Phaser.Scene {
   private weaponText!: Phaser.GameObjects.Text;
   private weaponIcon!: Phaser.GameObjects.Image;
   private turnBannerText!: Phaser.GameObjects.Text;
+  private sky!: Phaser.GameObjects.Image;
+  // World x the main camera centres on. Auto-follow steers it toward the
+  // active worm (or a shot in flight) until the player scrolls by hand;
+  // cameraManual then holds it where they left it until the game has a
+  // reason to take over again (see updateCamera).
+  private cameraFocusX = 0;
+  private cameraFocusY = 0;
+  // Set when a new turn starts: eases the zoom back to the default so each
+  // player begins at the same framing, whatever the last one zoomed out to.
+  private cameraZoomResetting = false;
+  private edgeArrows!: { left: Phaser.GameObjects.Triangle; right: Phaser.GameObjects.Triangle };
+  private cameraManual = false;
+  private cameraWorm: Worm | null = null;
+  private cameraProjectileCount = 0;
 
   private activeWormArrow!: Phaser.GameObjects.Image;
   private crosshairImage!: Phaser.GameObjects.Image;
+  // World-space marker for the point the homing missile will steer to.
+  private homingTargetMarker!: Phaser.GameObjects.Image;
+  // Ghost of the steel girder under the mouse while that weapon is picked.
+  private structurePreview!: Phaser.GameObjects.Image;
+  private drawnStructureCount = 0;
+  private weaponPicker!: WeaponPicker;
   // One label per worm, created once at match start (the roster is fixed -
   // worms die, they're never added) and repositioned/hidden each frame in
   // update() rather than recreated.
@@ -135,9 +177,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: GameSceneData): void {
-    this.team1Name = data.team1Name ?? 'Team 1';
-    this.team2Name = data.team2Name ?? 'Team 2';
-    this.wormNames = data.wormNames ?? DEFAULT_WORM_NAMES;
+    this.setup = data.setup ?? defaultMatchSetup();
   }
 
   create(): void {
@@ -188,18 +228,22 @@ export class GameScene extends Phaser.Scene {
     this.input.once('pointerdown', () => this.enterMobileFullscreen());
     this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.keyboard?.once('keydown', () => this.unlockAudio());
+    // Right-click is the weapon-picker toggle, so the browser menu must not
+    // pop up over the game.
+    this.input.mouse?.disableContextMenu();
+    this.input.keyboard?.addCapture('TAB');
+    this.input.keyboard?.on('keydown-TAB', () => this.weaponPicker.toggle());
 
     const { width, height } = this.scale; // viewport size - UI-space layout only
-    this.rt = createMatchRuntime(WORLD_WIDTH, WORLD_HEIGHT, this.team1Name, this.team2Name, this.wormNames);
+    this.rt = createMatchRuntime(WORLD_WIDTH, WORLD_HEIGHT, this.setup);
 
     // Static sky/cloud backdrop, added once - it never changes during a
     // match, unlike the terrain (destructible) and worms (moving) above it.
-    const sky = this.add
-      .image(0, 0, 'sky')
-      .setOrigin(0, 0)
-      .setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT)
-      .setDepth(DEPTH_BACKDROP);
-    this.worldObjects.push(sky);
+    // Sized and positioned every frame in updateCamera: the world is far
+    // wider than the sky art, so rather than stretching it across the whole
+    // map it rides along with the camera, drifting slightly for parallax.
+    this.sky = this.add.image(0, 0, 'sky').setOrigin(0.5, 0).setDepth(DEPTH_BACKDROP);
+    this.worldObjects.push(this.sky);
 
     // DEVIATION FROM BRIEF (ordering): the brief's Step 3 listed
     // TerrainRenderer before WaterRenderer, which would put the water band in
@@ -222,7 +266,7 @@ export class GameScene extends Phaser.Scene {
     this.projectileRenderer = new ProjectileRenderer(this, this.worldObjects);
     this.crateRenderer = new CrateRenderer(this, this.worldObjects);
 
-    // The HUD panel sits top-centre, in the gap between the two team life
+    // The HUD panel sits top-centre, in the gap between the team life
     // bars (which HudRenderer anchors to the left and right edges). Top-left
     // would sit directly on top of the first team's bar and hide it.
     const hudPanelWidth = 320;
@@ -239,7 +283,7 @@ export class GameScene extends Phaser.Scene {
     hudPanel.strokeRoundedRect(hudPanelX, 6, hudPanelWidth, hudPanelHeight, 16);
 
     this.uiObjects.push(hudPanel);
-    this.hudRenderer = new HudRenderer(this, this.uiObjects, width);
+    this.hudRenderer = new HudRenderer(this, this.uiObjects, width, this.rt.teams.length);
 
     this.hudText = this.add.text(hudPanelX + 14, 16, '', {
       fontFamily: "'Baloo 2', sans-serif",
@@ -267,6 +311,10 @@ export class GameScene extends Phaser.Scene {
       lineSpacing: 4,
     });
     this.uiObjects.push(this.weaponText);
+    // The weapon line doubles as the button that opens the weapon picker.
+    for (const weaponLine of [this.weaponIcon, this.weaponText]) {
+      weaponLine.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.weaponPicker.toggle());
+    }
 
     this.turnBannerText = this.add
       .text(width / 2, height / 2 - 40, '', {
@@ -281,9 +329,9 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(0);
     this.uiObjects.push(this.turnBannerText);
 
-    [0, 1].forEach((i) => {
+    this.rt.teams.forEach((team, i) => {
       const teamNameText = this.add
-        .text(teamHealthBarX(i, width) + TEAM_BAR_WIDTH / 2, 8, this.rt.teams[i].name, {
+        .text(teamHealthBarX(i, width) + TEAM_BAR_WIDTH / 2, 8 + teamHudRowOffset(i), team.name, {
           fontFamily: "'Baloo 2', sans-serif",
           fontSize: '16px',
           fontStyle: '700',
@@ -293,6 +341,24 @@ export class GameScene extends Phaser.Scene {
         })
         .setOrigin(0.5, 0);
       this.uiObjects.push(teamNameText);
+    });
+
+    // Half-transparent chevrons at the screen edges, faded in while edge
+    // scrolling is actually moving the map that way (see updateCamera).
+    const arrowY = height / 2;
+    const arrowColor = 0xfff8e7;
+    this.edgeArrows = {
+      left: this.add.triangle(26, arrowY, 22, 0, 22, 44, 0, 22, arrowColor).setAlpha(0),
+      right: this.add.triangle(width - 26, arrowY, 0, 0, 0, 44, 22, 22, arrowColor).setAlpha(0),
+    };
+    for (const arrow of [this.edgeArrows.left, this.edgeArrows.right]) {
+      arrow.setStrokeStyle(2, 0x16213f, 1);
+      this.uiObjects.push(arrow);
+    }
+
+    this.weaponPicker = new WeaponPicker(this, this.uiObjects, width, height, (slot) => {
+      sharedInput.selectedWeapon = slot;
+      this.updateMobileWeaponLabel();
     });
 
     // A bouncing "it's your turn" arrow above the active worm's head. Hidden
@@ -309,6 +375,20 @@ export class GameScene extends Phaser.Scene {
     // worm pass.
     this.crosshairImage = this.add.image(0, 0, 'crosshair').setVisible(false);
     this.worldObjects.push(this.crosshairImage);
+    this.homingTargetMarker = this.add.image(0, 0, 'crosshair').setTint(0xff4d4d).setVisible(false);
+    this.worldObjects.push(this.homingTargetMarker);
+    // The girder art has wide transparent padding - cropped once into its
+    // own texture so the preview can simply be sized to the girder.
+    if (!this.textures.exists('steelStructure')) {
+      const { cropX, cropY, cropWidth, cropHeight } = STEEL_STRUCTURE_ART;
+      const cropped = this.textures.createCanvas('steelStructure', cropWidth, cropHeight)!;
+      const source = this.textures.get('steelStructure_placed').getSourceImage() as CanvasImageSource;
+      cropped.context.drawImage(source, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      cropped.refresh();
+    }
+    this.structurePreview = this.add.image(0, 0, 'steelStructure').setAlpha(0.6).setVisible(false);
+    this.worldObjects.push(this.structurePreview);
+    this.drawnStructureCount = 0;
 
     for (const team of this.rt.teams) {
       for (const worm of team.worms) {
@@ -346,22 +426,18 @@ export class GameScene extends Phaser.Scene {
     this.uiCamera.ignore(this.worldObjects);
     this.ignoredWorldObjectCount = this.worldObjects.length;
 
-    // Zoom the main camera out just enough that the whole (larger) world
-    // fits the viewport - world and viewport share a 16:9 ratio, so one
-    // zoom factor covers both axes exactly. That alone doesn't center the
-    // world, though: Phaser zooms a camera about its own midpoint, not the
-    // world origin, so with scroll left at (0, 0) the extra world revealed
-    // by zooming out past 1 would land off both the right and bottom edges
-    // of the viewport instead of being split evenly around it.
-    this.cameras.main.setZoom(width / WORLD_WIDTH);
-    // Phaser zooms a camera about its own midpoint, not the world origin, so
-    // scroll must be offset by half the extra world size on each axis to
-    // center the (larger) world in the viewport - not (0,0), which would
-    // leave the world's right/bottom edges (and the whole water band) off
-    // screen. This scroll is set once here and never touched again, so the
-    // "no scrolling/follow" constraint still holds - only the fixed offset
-    // changes from the original (0,0).
-    this.cameras.main.setScroll((WORLD_WIDTH - width) / 2, (WORLD_HEIGHT - height) / 2);
+    // Starts at the default play zoom (see cameraZoomLimits), which the
+    // wheel can only zoom out from, never further in. No setBounds: updateCamera clamps itself, and Phaser's bounds would
+    // fight it once zoomed out past the point where the world fits.
+    this.cameras.main.setZoom(cameraZoomLimits(width, height, WORLD_WIDTH, WORLD_HEIGHT).max);
+    this.cameraZoomResetting = false;
+    this.cameraManual = false;
+    this.cameraWorm = currentWorm(this.rt.match).worm;
+    this.cameraProjectileCount = 0;
+    this.cameraFocusX = this.cameraWorm.x;
+    this.cameraFocusY = WORLD_HEIGHT; // clamped down to the bottom-most view on the first update
+    this.updateCamera(0);
+    this.input.on('wheel', this.handleWheel, this);
 
     // Release the terrain mask textures' GPU memory when this scene shuts
     // down (on restart, or when EndScene takes over) instead of leaking it.
@@ -402,13 +478,27 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointerupoutside', this.handlePointerUp, this);
   }
 
-  private handlePointerDown(pointer: Phaser.Input.Pointer): void {
+  private handlePointerDown(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]): void {
+    // A click on the picker or the HUD weapon line is handled by that
+    // object's own listener - it must not also act on the world below it.
+    if (currentlyOver.length > 0) return;
+    if (pointer.rightButtonDown()) {
+      this.weaponPicker.toggle();
+      return;
+    }
     if (this.rt.turnBannerTimer !== null) return;
     const worldPoint = this.pointerWorldPoint(pointer);
+    const worm = currentWorm(this.rt.match).worm;
+    const movementPointer = isMobileDevice() && this.isMovementPointer(pointer, worldPoint, worm);
+
+    if (!movementPointer && this.trySetHomingTarget(worldPoint)) return;
+    if (!movementPointer && this.selectedWeaponIsStructure()) {
+      if (tryPlaceStructure(this.rt, sharedInput, worldPoint.x, worldPoint.y)) soundSystem.play('fire');
+      return;
+    }
     if (!isMobileDevice()) return;
 
-    const worm = currentWorm(this.rt.match).worm;
-    if (this.isMovementPointer(pointer, worldPoint, worm) && this.movementPointerId === null) {
+    if (movementPointer && this.movementPointerId === null) {
       this.movementPointerId = pointer.pointerId;
       this.movementStartX = pointer.x;
       this.movementStartY = pointer.y;
@@ -431,7 +521,7 @@ export class GameScene extends Phaser.Scene {
     controls.className = 'mobile-game-controls';
     controls.innerHTML = `
       <button type="button" data-action="previous" aria-label="Previous weapon">Prev</button>
-      <output aria-live="polite"></output>
+      <output aria-live="polite" data-action="weapons"></output>
       <button type="button" data-action="next" aria-label="Next weapon">Next</button>
       <button type="button" data-action="jump" aria-label="Jump">Jump</button>
       <button type="button" class="mobile-end-turn" data-action="end" aria-label="End turn">End</button>
@@ -444,6 +534,7 @@ export class GameScene extends Phaser.Scene {
       const action = (event.target as HTMLElement).dataset.action;
       if (action === 'previous') this.selectMobileWeapon(-1);
       if (action === 'next') this.selectMobileWeapon(1);
+      if (action === 'weapons') this.weaponPicker.toggle();
       if (action === 'end') sharedInput.endTurnRequested = true;
     });
 
@@ -512,6 +603,170 @@ export class GameScene extends Phaser.Scene {
       pointer.x <= this.scale.width * MOBILE_MOVEMENT_ZONE_WIDTH_FRACTION &&
       pointer.y >= this.scale.height * MOBILE_MOVEMENT_ZONE_MIN_Y_FRACTION;
     return nearActiveWorm || inMovementZone;
+  }
+
+  // Only while the homing missile is selected and this turn hasn't fired yet;
+  // otherwise a click on the map keeps its usual (mobile aim/jump) meaning.
+  private trySetHomingTarget(worldPoint: Phaser.Math.Vector2): boolean {
+    const weaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
+    if (!WEAPONS[weaponKey].homing || this.rt.retirementTimer !== null) return false;
+    const worm = currentWorm(this.rt.match).worm;
+    if (!worm.alive || worm.dying) return false;
+    this.rt.homingTarget = { x: worldPoint.x, y: worldPoint.y };
+    return true;
+  }
+
+  private selectedWeaponIsStructure(): boolean {
+    const weaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
+    return WEAPONS[weaponKey].structure === true;
+  }
+
+  // Draws every girder placed since last frame into the terrain art, and
+  // (desktop only - touch has no hover) moves the placement ghost to the
+  // mouse: green where a click would place it, red where it wouldn't, with
+  // a faint ring marking how far from the worm it may go.
+  private updateStructures(): void {
+    const structures = this.rt.structures ?? [];
+    for (; this.drawnStructureCount < structures.length; this.drawnStructureCount++) {
+      this.terrainRenderer.addStructure(this, structures[this.drawnStructureCount]);
+    }
+
+    const worm = currentWorm(this.rt.match).worm;
+    const placing =
+      !isMobileDevice() &&
+      this.selectedWeaponIsStructure() &&
+      !this.weaponPicker.isOpen &&
+      this.rt.turnBannerTimer === null &&
+      this.rt.retirementTimer === null &&
+      !this.rt.rope &&
+      worm.alive &&
+      !worm.dying;
+    if (!placing) {
+      this.structurePreview.setVisible(false);
+      return;
+    }
+    const pointer = this.input.activePointer;
+    const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const structure = createStructure(point.x, point.y, structureRotation(worm));
+    const valid = isStructurePlacementValid(this.rt.terrain, this.allWorms(), worm, structure);
+    this.structurePreview
+      .setPosition(structure.x, structure.y)
+      .setDisplaySize(structure.length, structure.thickness)
+      .setRotation(structure.rotation)
+      .setTint(valid ? 0x9dff9d : 0xff6b6b)
+      .setVisible(true);
+    this.ropeGraphics.lineStyle(2, 0xffffff, 0.25);
+    this.ropeGraphics.strokeCircle(worm.x, worm.y, STRUCTURE_PLACE_RANGE);
+  }
+
+  // Shows the picked point while aiming, then follows the missile's own copy
+  // of it once fired (rt.homingTarget is cleared at turn end, the missile's
+  // isn't, so the marker stays up until it lands).
+  private updateHomingTargetMarker(activeWeaponKey: string, timeMs: number): void {
+    const inFlight = this.rt.projectiles.find((p) => p.alive && p.target);
+    const target = inFlight?.target ?? (activeWeaponKey === 'homingMissile' ? this.rt.homingTarget : null);
+    if (!target) {
+      this.homingTargetMarker.setVisible(false);
+      return;
+    }
+    const pulse = 1 + Math.sin(timeMs / 150) * 0.15;
+    this.homingTargetMarker
+      .setPosition(target.x, target.y)
+      .setScale(1.6 * WORM_RENDER_SCALE * pulse)
+      .setRotation(timeMs / 600)
+      .setVisible(true);
+  }
+
+  // Mouse wheel zooms in/out around the cursor: the world point under it
+  // stays put, so you zoom toward whatever you're pointing at.
+  private handleWheel(pointer: Phaser.Input.Pointer, _over: unknown, _deltaX: number, deltaY: number): void {
+    if (this.weaponPicker.isOpen || deltaY === 0) return;
+    const camera = this.cameras.main;
+    const { width, height } = this.scale;
+    const limits = cameraZoomLimits(width, height, WORLD_WIDTH, WORLD_HEIGHT);
+    const zoom = Phaser.Math.Clamp(camera.zoom * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY), limits.min, limits.max);
+    if (zoom === camera.zoom) return;
+    this.cameraZoomResetting = false;
+    const anchor = this.pointerWorldPoint(pointer);
+    camera.setZoom(zoom);
+    this.cameraFocusX = zoomAnchoredCenter(anchor.x, pointer.x, width, zoom);
+    this.cameraFocusY = zoomAnchoredCenter(anchor.y, pointer.y, height, zoom);
+    this.cameraManual = true;
+    // Applied now rather than next frame, so the world point under the
+    // cursor is already correct for the next wheel event in this burst.
+    this.updateCamera(0);
+  }
+
+  private updateCamera(dt: number): void {
+    const camera = this.cameras.main;
+    const { width, height } = this.scale;
+    const activeWorm = currentWorm(this.rt.match).worm;
+
+    // A new turn, a newly fired shot, or the player walking the active worm
+    // all hand the camera back to auto-follow after a manual scroll/zoom.
+    const newTurn = activeWorm !== this.cameraWorm;
+    const newShot = this.rt.projectiles.length > this.cameraProjectileCount;
+    if (newTurn || newShot || sharedInput.left || sharedInput.right) {
+      this.cameraManual = false;
+    }
+    if (newTurn) this.cameraZoomResetting = true;
+    if (this.cameraZoomResetting) {
+      const defaultZoom = cameraZoomLimits(width, height, WORLD_WIDTH, WORLD_HEIGHT).max;
+      const eased = camera.zoom + (defaultZoom - camera.zoom) * (1 - Math.exp(-dt * ZOOM_RESET_RATE));
+      const done = Math.abs(defaultZoom - eased) < 0.001;
+      camera.setZoom(done ? defaultZoom : eased);
+      if (done) this.cameraZoomResetting = false;
+    }
+    const viewWidth = width / camera.zoom;
+    const viewHeight = height / camera.zoom;
+    this.cameraWorm = activeWorm;
+    this.cameraProjectileCount = this.rt.projectiles.length;
+
+    // Already clamped last frame, so any change below is real movement.
+    const previousFocusX = this.cameraFocusX;
+    let edgeDirection: -1 | 0 | 1 = 0;
+    const pointer = this.input.activePointer;
+    if (!isMobileDevice() && !this.weaponPicker.isOpen && this.input.isOver && pointer.y >= EDGE_SCROLL_MIN_Y) {
+      edgeDirection = edgeScrollDirection(pointer.x, width, EDGE_SCROLL_MARGIN);
+      if (edgeDirection !== 0) {
+        this.cameraFocusX += (edgeDirection * EDGE_SCROLL_SPEED * dt) / camera.zoom;
+        this.cameraManual = true;
+      }
+    }
+
+    if (!this.cameraManual) {
+      const target = this.rt.projectiles.find((p) => p.alive) ?? activeWorm;
+      const follow = 1 - Math.exp(-dt * CAMERA_FOLLOW_RATE);
+      this.cameraFocusX += (target.x - this.cameraFocusX) * follow;
+      this.cameraFocusY += (target.y - this.cameraFocusY) * follow;
+    }
+    this.cameraFocusX = clampCameraCenter(this.cameraFocusX, viewWidth, WORLD_WIDTH);
+    this.cameraFocusY = clampCameraCenter(this.cameraFocusY, viewHeight, WORLD_HEIGHT, true);
+    camera.centerOn(this.cameraFocusX, this.cameraFocusY);
+
+    // Only lit while the map is really moving that way - held against the
+    // world's edge, the arrow fades back out.
+    const scrollingLeft = edgeDirection === -1 && this.cameraFocusX < previousFocusX - 0.01;
+    const scrollingRight = edgeDirection === 1 && this.cameraFocusX > previousFocusX + 0.01;
+    const fade = dt === 0 ? 1 : 1 - Math.exp(-dt * EDGE_ARROW_FADE_RATE);
+    for (const [arrow, lit] of [
+      [this.edgeArrows.left, scrollingLeft],
+      [this.edgeArrows.right, scrollingRight],
+    ] as const) {
+      const targetAlpha = lit ? EDGE_ARROW_ALPHA : 0;
+      arrow.setAlpha(arrow.alpha + (targetAlpha - arrow.alpha) * fade);
+    }
+
+    // Cover the view (cropping the sky art's plain lower haze rather than
+    // distorting it), then slide it a fraction of the scroll for parallax.
+    const viewTop = this.cameraFocusY - viewHeight / 2;
+    const skyScale = Math.max((viewWidth * SKY_PARALLAX_OVERSCAN) / this.sky.width, viewHeight / this.sky.height);
+    const skyWidth = this.sky.width * skyScale;
+    const scrollRange = Math.max(1, WORLD_WIDTH - viewWidth);
+    const scrollProgress = (this.cameraFocusX - viewWidth / 2) / scrollRange;
+    this.sky
+      .setScale(skyScale)
+      .setPosition(this.cameraFocusX + (0.5 - scrollProgress) * (skyWidth - viewWidth), viewTop);
   }
 
   private pointerWorldPoint(pointer: Phaser.Input.Pointer): Phaser.Math.Vector2 {
@@ -642,13 +897,16 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // Skipped for bazooka/shotgun while just aiming (not charging) - their
-    // held-weapon sprite already points along the aim angle, so the crosshair
-    // would be redundant clutter; the charge bar still matters and stays.
+    // Skipped for bazooka/shotgun/homingMissile while just aiming (not
+    // charging) - their held-weapon sprite already points along the aim
+    // angle, so the crosshair would be redundant clutter; the charge bar
+    // still matters and stays. Melee weapons don't use aimAngle for
+    // anything, so their crosshair is suppressed outright, charging or not.
     const activeWeaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
     const weaponHasOwnAimIndicator =
       activeWeaponKey === 'bazooka' || activeWeaponKey === 'shotgun' || activeWeaponKey === 'homingMissile';
-    const isMeleeWeapon = WEAPONS[activeWeaponKey].melee;
+    // Girders don't fire along the aim either - it only tilts them.
+    const isMeleeWeapon = WEAPONS[activeWeaponKey].melee || WEAPONS[activeWeaponKey].structure === true;
     if (!isMeleeWeapon && active.worm.alive && (this.rt.charging || !weaponHasOwnAimIndicator)) {
       const worm = active.worm;
       const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
@@ -664,6 +922,30 @@ export class GameScene extends Phaser.Scene {
       this.crosshairImage.setPosition(endX, endY).setTint(color).setVisible(true);
     } else {
       this.crosshairImage.setVisible(false);
+    }
+
+    // Laser sight for the hitscan weapons: traces the exact ray the shot will
+    // take (same raycastHit call fireWeapon makes) so the player can see
+    // whether it'll connect before pulling the trigger. Hidden once the
+    // shot is fired so it doesn't compete with the tracer.
+    const activeWeapon = WEAPONS[activeWeaponKey];
+    if (activeWeapon.hitscan && active.worm.alive && this.rt.retirementTimer === null && !tracer) {
+      const worm = active.worm;
+      const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
+      const worms = this.rt.teams.flatMap((t) => t.worms);
+      const hit = raycastHit(this.rt.terrain, worms, worm.x, worm.y, fireAngle, activeWeapon.range!, worm);
+      const color = hit.type === 'worm' ? 0xff3b3b : 0xff9d9d;
+      this.ropeGraphics.lineStyle(1.5, color, hit.type === 'worm' ? 0.85 : 0.45);
+      this.ropeGraphics.lineBetween(
+        worm.x + Math.cos(fireAngle) * 16,
+        worm.y + Math.sin(fireAngle) * 16,
+        hit.x,
+        hit.y,
+      );
+      if (hit.type !== 'none') {
+        this.ropeGraphics.fillStyle(color, 0.9);
+        this.ropeGraphics.fillCircle(hit.x, hit.y, 3);
+      }
     }
   }
 
@@ -701,6 +983,10 @@ export class GameScene extends Phaser.Scene {
     const activeTeam = this.rt.teams.find((t) => t.playerId === active.playerId);
     updateWeaponText(this.weaponText, sharedInput.selectedWeapon, activeTeam?.ammo?.[activeWeaponKey]);
     this.weaponIcon.setTexture(`${activeWeaponKey}_held`);
+    this.weaponPicker.update(sharedInput.selectedWeapon, activeTeam);
+    this.updateHomingTargetMarker(activeWeaponKey, time);
+    this.updateCamera(dt);
+    this.updateStructures();
     this.updateMobileWeaponLabel();
     this.triggerEffectBursts();
     this.triggerMovementDust(delta);
