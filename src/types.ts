@@ -55,6 +55,7 @@ export interface Worm {
   onGround: boolean;
   dying: boolean;
   deathTimer: number | null;
+  knockbackTimer: number | null;
 }
 
 export interface WormInput {
@@ -110,7 +111,11 @@ export type WeaponKey =
   | 'airstrikeRocket'
   | 'holyHandGrenade'
   | 'mine'
-  | 'drill';
+  | 'drill'
+  | 'homingMissile'
+  | 'clusterBomb'
+  | 'clusterFragment'
+  | 'bat';
 
 export interface WeaponDef {
   key: WeaponKey;
@@ -129,6 +134,9 @@ export interface WeaponDef {
   rope: boolean;
   airstrike: boolean;
   drill: boolean;
+  melee: boolean;
+  homing: boolean;
+  clusterCount?: number;
   range?: number;
 }
 
@@ -147,6 +155,7 @@ export interface Projectile {
 
 export interface ProjectileUpdateResult {
   exploded: boolean;
+  spawned?: Projectile[];
 }
 
 export interface Rope {

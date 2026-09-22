@@ -82,6 +82,10 @@ const WEAPON_LABELS: Record<WeaponKey, string> = {
   holyHandGrenade: 'Holy Hand Grenade',
   mine: 'Mine',
   drill: 'Drill',
+  homingMissile: 'Homing Missile',
+  clusterBomb: 'Cluster Bomb',
+  clusterFragment: 'Cluster Fragment',
+  bat: 'Baseball Bat',
 };
 
 export function weaponLabel(selectedWeapon: number): string {

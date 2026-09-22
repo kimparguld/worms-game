@@ -10,7 +10,7 @@ export function createWorm(x: number, y: number, team: string, name: string): Wo
   return {
     x, y, vx: 0, vy: 0, hp: STARTING_HP, team, name,
     facing: 1, aimAngle: -Math.PI / 4, alive: true, onGround: false,
-    dying: false, deathTimer: null,
+    dying: false, deathTimer: null, knockbackTimer: null,
   };
 }
 

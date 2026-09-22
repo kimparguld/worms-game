@@ -4,7 +4,7 @@ import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 
 describe('WEAPONS', () => {
-  it('defines exactly the ten spec weapons', () => {
+  it('defines exactly the fourteen spec weapons', () => {
     expect(Object.keys(WEAPONS).sort()).toEqual(
       [
         'bazooka',
@@ -17,8 +17,33 @@ describe('WEAPONS', () => {
         'holyHandGrenade',
         'mine',
         'drill',
+        'homingMissile',
+        'clusterBomb',
+        'clusterFragment',
+        'bat',
       ].sort(),
     );
+  });
+});
+
+describe('WEAPONS expanded arsenal', () => {
+  it('flags exactly the homing missile as a homing weapon', () => {
+    const homingWeapons = Object.values(WEAPONS)
+      .filter((w) => w.homing)
+      .map((w) => w.key);
+    expect(homingWeapons).toEqual(['homingMissile']);
+  });
+
+  it('flags exactly the bat as a melee weapon', () => {
+    const meleeWeapons = Object.values(WEAPONS)
+      .filter((w) => w.melee)
+      .map((w) => w.key);
+    expect(meleeWeapons).toEqual(['bat']);
+  });
+
+  it('gives the cluster bomb 5 fragments and never lets a fragment cluster again', () => {
+    expect(WEAPONS.clusterBomb.clusterCount).toBe(5);
+    expect(WEAPONS.clusterFragment.clusterCount).toBeUndefined();
   });
 });
 
@@ -26,7 +51,7 @@ describe('WEAPONS new arsenal', () => {
   it('gives the sniper rifle a precise long-range hitscan shot with no blast', () => {
     expect(WEAPONS.sniperRifle.hitscan).toBe(true);
     expect(WEAPONS.sniperRifle.pellets).toBe(1);
-    expect(WEAPONS.sniperRifle.blastRadius).toBe(0);
+    expect(WEAPONS.sniperRifle.blastRadius).toBe(10);
     expect(WEAPONS.sniperRifle.range).toBe(1000);
   });
 
@@ -72,8 +97,8 @@ describe('WEAPONS range', () => {
   });
 
   it('gives the grenade enough max speed and fuse time to travel and bounce further', () => {
-    expect(WEAPONS.grenade.maxSpeed).toBe(800);
-    expect(WEAPONS.grenade.fuseTime).toBe(4.5);
+    expect(WEAPONS.grenade.maxSpeed).toBe(900);
+    expect(WEAPONS.grenade.fuseTime).toBe(3.5);
   });
 });
 
