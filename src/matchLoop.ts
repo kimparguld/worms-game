@@ -36,6 +36,7 @@ export const WEAPON_KEYS: WeaponKey[] = [
   'holyHandGrenade',
   'mine',
   'drill',
+  'homingMissile',
 ];
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;

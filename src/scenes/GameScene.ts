@@ -646,7 +646,8 @@ export class GameScene extends Phaser.Scene {
     // held-weapon sprite already points along the aim angle, so the crosshair
     // would be redundant clutter; the charge bar still matters and stays.
     const activeWeaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
-    const weaponHasOwnAimIndicator = activeWeaponKey === 'bazooka' || activeWeaponKey === 'shotgun';
+    const weaponHasOwnAimIndicator =
+      activeWeaponKey === 'bazooka' || activeWeaponKey === 'shotgun' || activeWeaponKey === 'homingMissile';
     if (active.worm.alive && (this.rt.charging || !weaponHasOwnAimIndicator)) {
       const worm = active.worm;
       const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;

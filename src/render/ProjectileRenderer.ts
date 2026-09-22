@@ -3,7 +3,7 @@ import type { Projectile, WeaponKey } from '../types.js';
 import { WEAPONS } from '../weapons.js';
 import { projectileBlinkOn } from '../render.js';
 
-const DIRECTIONAL_WEAPONS = new Set<WeaponKey>(['bazooka', 'airstrikeRocket', 'sniperRifle', 'drill']);
+const DIRECTIONAL_WEAPONS = new Set<WeaponKey>(['bazooka', 'airstrikeRocket', 'sniperRifle', 'drill', 'homingMissile']);
 const BLINK_TINT = 0xff2222;
 const NORMAL_TINT = 0xffffff;
 

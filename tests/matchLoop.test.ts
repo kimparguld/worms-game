@@ -649,7 +649,7 @@ describe('stepMatch water', () => {
 });
 
 describe('WEAPON_KEYS', () => {
-  it('lists all ten weapons, with drill replacing the grappling hook slot', () => {
+  it('lists all ten original weapons plus the three newest at the end', () => {
     expect(WEAPON_KEYS).toEqual([
       'bazooka',
       'grenade',
@@ -661,6 +661,9 @@ describe('WEAPON_KEYS', () => {
       'holyHandGrenade',
       'mine',
       'drill',
+      'homingMissile',
+      'clusterBomb',
+      'bat',
     ]);
   });
 });
@@ -970,6 +973,24 @@ describe('stepMatch limited-use weapons', () => {
 
     expect(rt.teams[0].ammo!.airstrikeRocket).toBe(0);
     expect(rt.teams[1].ammo!.airstrikeRocket).toBe(1);
+  });
+});
+
+describe('stepMatch homing missile', () => {
+  it('fires a chargeable homing missile and decrements limited ammo', () => {
+    const teams = twoWormTeams();
+    teams[0].ammo = { homingMissile: 2 };
+    const rt = makeRuntime(teams);
+    const homingIndex = WEAPON_KEYS.indexOf('homingMissile') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: homingIndex });
+
+    stepMatch(rt, input, 0.2); // charge
+    input.firing = false;
+    stepMatch(rt, input, 0.016); // release - fires
+
+    expect(rt.projectiles).toHaveLength(1);
+    expect(rt.projectiles[0].weaponKey).toBe('homingMissile');
+    expect(rt.teams[0].ammo!.homingMissile).toBe(1);
   });
 });
 

@@ -6,6 +6,7 @@ import type { Terrain, WeaponDef, WeaponKey, Worm, RaycastHit, ProjectileIntegra
 export const WEAPON_MATCH_LIMITS: Partial<Record<WeaponKey, number>> = {
   airstrikeRocket: 1,
   holyHandGrenade: 2,
+  homingMissile: 2,
 };
 
 export const WEAPONS: Record<WeaponKey, WeaponDef> = {
@@ -315,6 +316,21 @@ export function integrateProjectile(
     pos: { x: pos.x + nvx * dt, y: pos.y + nvy * dt },
     vel: { x: nvx, y: nvy },
   };
+}
+
+export const HOMING_TURN_RATE = Math.PI * 0.8; // rad/s - full lock-on takes a couple seconds, not an instant snap
+
+export function applyHoming(vel: Vector2, pos: Vector2, target: Vector2, dt: number): Vector2 {
+  const currentAngle = Math.atan2(vel.y, vel.x);
+  const desiredAngle = Math.atan2(target.y - pos.y, target.x - pos.x);
+  let delta = desiredAngle - currentAngle;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  const maxStep = HOMING_TURN_RATE * dt;
+  const turn = Math.max(-maxStep, Math.min(maxStep, delta));
+  const newAngle = currentAngle + turn;
+  const speed = Math.hypot(vel.x, vel.y);
+  return { x: Math.cos(newAngle) * speed, y: Math.sin(newAngle) * speed };
 }
 
 export function calcDamage(distance: number, blastRadius: number, maxDamage: number): number {

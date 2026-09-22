@@ -1,4 +1,4 @@
-import { integrateProjectile, calcDamage, WEAPONS } from './weapons.js';
+import { integrateProjectile, calcDamage, WEAPONS, applyHoming } from './weapons.js';
 import { isSolid, carveCircle } from './terrain.js';
 import { takeDamage, applyExplosionKnockback } from './worm.js';
 import { GRAVITY } from './constants.js';
@@ -86,6 +86,29 @@ export function updateProjectile(
 
   const prevX = projectile.x;
   const prevY = projectile.y;
+
+  if (def.homing && projectile.owner) {
+    let target: Worm | undefined;
+    let bestDistance = Infinity;
+    for (const w of worms) {
+      if (!w.alive || w.dying || w.team === projectile.owner.team) continue;
+      const distance = Math.hypot(w.x - projectile.x, w.y - projectile.y);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        target = w;
+      }
+    }
+    if (target) {
+      const steered = applyHoming(
+        { x: projectile.vx, y: projectile.vy },
+        { x: projectile.x, y: projectile.y },
+        { x: target.x, y: target.y },
+        dt,
+      );
+      projectile.vx = steered.x;
+      projectile.vy = steered.y;
+    }
+  }
 
   const gravity = def.gravity ? GRAVITY : 0;
   const windAccel = def.windAffected ? wind : 0;

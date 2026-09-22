@@ -136,4 +136,19 @@ describe('updateProjectile', () => {
     expect(projectile.x).toBeCloseTo(startX, 0);
     expect(result!.exploded).toBe(true);
   });
+
+  it('curves a homing missile toward the nearest enemy worm', () => {
+    const terrain = flatTerrain(2000, 2000, 1900); // ground far below - stays airborne for the test window
+    const shooter = createWorm(0, 0, 'p1', 'Shooter');
+    const target = createWorm(300, 300, 'p2', 'Target'); // down and to the right of the flight path
+    const projectile = createProjectile('homingMissile', 0, 0, 0, 1, shooter); // fired flat along +x
+    expect(projectile.vy).toBe(0);
+
+    for (let i = 0; i < 10; i++) {
+      updateProjectile(projectile, terrain, [shooter, target], 0, 1 / 60);
+    }
+
+    expect(projectile.vy).toBeGreaterThan(0); // turned downward, toward the target
+    expect(Math.hypot(projectile.vx, projectile.vy)).toBeCloseTo(700, 0); // speed preserved (homingMissile has no gravity/wind)
+  });
 });

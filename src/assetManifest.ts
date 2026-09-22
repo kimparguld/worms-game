@@ -42,6 +42,7 @@ const WEAPON_PLACEHOLDER_COLORS: Record<string, number> = {
   holyHandGrenade: 0xffd700,
   mine: 0x37474f,
   drill: 0xd8dde3,
+  homingMissile: 0xe91e63,
 };
 
 const WEAPON_HELD_ENTRIES: AssetManifestEntry[] = Object.entries(WEAPON_PLACEHOLDER_COLORS).map(([key, color]) => ({
@@ -54,7 +55,7 @@ const WEAPON_HELD_ENTRIES: AssetManifestEntry[] = Object.entries(WEAPON_PLACEHOL
 }));
 
 // Bazooka and airstrikeRocket are elongated/directional; the rest are 24x24.
-const ELONGATED_PROJECTILE_KEYS = new Set(['bazooka', 'airstrikeRocket']);
+const ELONGATED_PROJECTILE_KEYS = new Set(['bazooka', 'airstrikeRocket', 'homingMissile']);
 
 const WEAPON_PROJECTILE_ENTRIES: AssetManifestEntry[] = Object.entries(WEAPON_PLACEHOLDER_COLORS).map(
   ([key, color]) => ({

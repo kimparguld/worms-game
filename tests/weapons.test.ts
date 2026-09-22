@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { WEAPONS, integrateProjectile, calcDamage, raycastHit } from '../src/weapons.js';
+import { WEAPONS, integrateProjectile, calcDamage, raycastHit, applyHoming, HOMING_TURN_RATE } from '../src/weapons.js';
 import { createTerrain } from '../src/terrain.js';
 import { createWorm } from '../src/worm.js';
 
@@ -169,5 +169,32 @@ describe('raycastHit', () => {
     worm.dying = true;
     const hit = raycastHit(terrain, [worm], 50, 0, Math.PI / 2, 200);
     expect(hit.type).toBe('none');
+  });
+});
+
+describe('applyHoming', () => {
+  it('turns velocity toward the target, clamped by HOMING_TURN_RATE, preserving speed', () => {
+    const vel = { x: 100, y: 0 }; // moving right, speed 100
+    const pos = { x: 0, y: 0 };
+    const target = { x: 100, y: 100 }; // desired angle: 45 degrees
+    const dt = 0.1;
+
+    const result = applyHoming(vel, pos, target, dt);
+
+    const maxTurn = HOMING_TURN_RATE * dt;
+    const newAngle = Math.atan2(result.y, result.x);
+    expect(newAngle).toBeCloseTo(maxTurn, 5); // clamped - hasn't reached 45 degrees yet
+    expect(Math.hypot(result.x, result.y)).toBeCloseTo(100, 5);
+  });
+
+  it('does not overshoot once already pointed at the target', () => {
+    const vel = { x: 0, y: 100 }; // moving straight down, speed 100
+    const pos = { x: 0, y: 0 };
+    const target = { x: 0, y: 100 }; // directly ahead
+
+    const result = applyHoming(vel, pos, target, 0.1);
+
+    expect(result.x).toBeCloseTo(0, 5);
+    expect(result.y).toBeCloseTo(100, 5);
   });
 });
