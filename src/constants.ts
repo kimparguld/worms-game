@@ -50,3 +50,6 @@ export const EXPLOSION_KNOCKBACK_PER_DAMAGE = 7;
 // effect of every death, not something a player chose to detonate.
 export const DEATH_EXPLOSION_RADIUS = 35;
 export const DEATH_EXPLOSION_DAMAGE = 30;
+export const MELEE_KNOCKBACK_SPEED = 600; // px/s horizontal shove from the bat
+export const MELEE_KNOCKBACK_LIFT = 200; // px/s upward pop, smaller than the shove itself
+export const MELEE_KNOCKBACK_DURATION = 0.5; // seconds the shoved worm ignores input and skips the vx clamp/decay

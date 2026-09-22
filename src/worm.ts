@@ -50,6 +50,19 @@ export function applyExplosionKnockback(worm: Worm, damage: number): void {
   worm.onGround = false;
 }
 
+// Shoves a worm horizontally in a specific direction (unlike
+// applyExplosionKnockback's vertical-only pop) - used by the melee bat, whose
+// hit should send the target flying away from the swinger, not just up. The
+// knockback window (duration) also has updateWormPhysics ignore input and
+// skip the usual vx clamp/decay, so the shove actually reads as a shove
+// instead of being crushed back to WORM_MOVE_SPEED within a frame or two.
+export function applyDirectionalKnockback(worm: Worm, direction: number, speed: number, lift: number, duration: number): void {
+  worm.vx = direction * speed;
+  worm.vy -= lift;
+  worm.onGround = false;
+  worm.knockbackTimer = duration;
+}
+
 export function adjustAim(worm: Worm, direction: number, dt: number): void {
   const AIM_SPEED = Math.PI / 2; // radians per second
   const LIMIT = Math.PI / 2;
@@ -59,14 +72,21 @@ export function adjustAim(worm: Worm, direction: number, dt: number): void {
 
 export function updateWormPhysics(worm: Worm, terrain: Terrain, input: WormInput, dt: number): void {
   if (!worm.alive) return;
+  if (worm.knockbackTimer !== null) {
+    worm.knockbackTimer -= dt;
+    if (worm.knockbackTimer <= 0) worm.knockbackTimer = null;
+  }
+  const knockedBack = worm.knockbackTimer !== null;
   // A dying worm can't be steered - it just plays out its death wiggle
-  // under normal gravity/collision, handled below unchanged.
-  const movementInput = worm.dying ? { left: false, right: false, jump: false } : input;
+  // under normal gravity/collision, handled below unchanged. A knocked-back
+  // worm gets the same treatment: it can't fight the shove, and its vx
+  // isn't decayed/clamped until the knockback window ends.
+  const movementInput = worm.dying || knockedBack ? { left: false, right: false, jump: false } : input;
 
   if (movementInput.left) { worm.vx -= WORM_MOVE_ACCEL * dt; worm.facing = -1; }
   if (movementInput.right) { worm.vx += WORM_MOVE_ACCEL * dt; worm.facing = 1; }
-  if (!movementInput.left && !movementInput.right) worm.vx *= 0.8;
-  worm.vx = Math.max(-WORM_MOVE_SPEED, Math.min(WORM_MOVE_SPEED, worm.vx));
+  if (!movementInput.left && !movementInput.right && !knockedBack) worm.vx *= 0.8;
+  if (!knockedBack) worm.vx = Math.max(-WORM_MOVE_SPEED, Math.min(WORM_MOVE_SPEED, worm.vx));
 
   if (movementInput.jump && worm.onGround) {
     worm.vy = -JUMP_IMPULSE;

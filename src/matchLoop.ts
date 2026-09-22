@@ -6,6 +6,7 @@ import {
   takeDamage,
   tickDeathAnimation,
   applyExplosionKnockback,
+  applyDirectionalKnockback,
 } from './worm.js';
 import { createMatch, currentWorm, advanceTurn, tickTurnTimer } from './game.js';
 import { createProjectile, updateProjectile } from './projectile.js';
@@ -22,6 +23,9 @@ import {
   DEATH_EXPLOSION_DAMAGE,
   GRAVITY,
   STARTING_HP,
+  MELEE_KNOCKBACK_SPEED,
+  MELEE_KNOCKBACK_LIFT,
+  MELEE_KNOCKBACK_DURATION,
 } from './constants.js';
 import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate, Explosion, Projectile } from './types.js';
 
@@ -38,6 +42,7 @@ export const WEAPON_KEYS: WeaponKey[] = [
   'drill',
   'homingMissile',
   'clusterBomb',
+  'bat',
 ];
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
@@ -247,6 +252,33 @@ function detonateCratesCaughtInBlast(rt: MatchRuntime, newExplosions: Explosion[
   rt.crates = remaining;
 }
 
+function meleeStrike(rt: MatchRuntime, worm: Worm, range: number, damage: number): void {
+  let target: Worm | null = null;
+  let bestDistance = Infinity;
+  for (const candidate of allWorms(rt)) {
+    if (candidate === worm || !candidate.alive || candidate.dying) continue;
+    const dx = candidate.x - worm.x;
+    const dy = candidate.y - worm.y;
+    if (dx * worm.facing < 0) continue; // behind the swinger
+    const distance = Math.hypot(dx, dy);
+    if (distance <= range && distance < bestDistance) {
+      bestDistance = distance;
+      target = candidate;
+    }
+  }
+  if (target) {
+    takeDamage(target, damage);
+    applyDirectionalKnockback(
+      target,
+      Math.sign(target.x - worm.x) || worm.facing,
+      MELEE_KNOCKBACK_SPEED,
+      MELEE_KNOCKBACK_LIFT,
+      MELEE_KNOCKBACK_DURATION,
+    );
+  }
+  rt.retirementTimer = 1;
+}
+
 function rainAirstrike(rt: MatchRuntime, weaponKey: WeaponKey): void {
   const margin = Math.min(AIRSTRIKE_EDGE_MARGIN, rt.terrain.width / 4);
   const usableWidth = Math.max(1, rt.terrain.width - margin * 2);
@@ -288,6 +320,8 @@ function fireWeapon(rt: MatchRuntime, worm: Worm, weaponKey: WeaponKey, power: n
     // on the ground before the swing can take over - a small upward nudge
     // lifts it clear so updateRopeSwing actually gets to run the swing.
     if (result.attached) worm.vy -= ROPE_HOP_IMPULSE;
+  } else if (def.melee) {
+    meleeStrike(rt, worm, def.range ?? 50, def.maxDamage);
   } else {
     rt.projectiles.push(createProjectile(weaponKey, worm.x, worm.y, fireAngle, power, worm));
     rt.retirementTimer = 2;

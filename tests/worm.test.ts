@@ -6,8 +6,9 @@ import {
   updateWormPhysics,
   tickDeathAnimation,
   applyExplosionKnockback,
+  applyDirectionalKnockback,
 } from '../src/worm.js';
-import { DEATH_ANIM_DURATION_MS, EXPLOSION_KNOCKBACK_PER_DAMAGE } from '../src/constants.js';
+import { DEATH_ANIM_DURATION_MS, EXPLOSION_KNOCKBACK_PER_DAMAGE, WORM_MOVE_SPEED } from '../src/constants.js';
 import { createTerrain } from '../src/terrain.js';
 import type { Terrain, WormInput } from '../src/types.js';
 
@@ -181,5 +182,44 @@ describe('updateWormPhysics', () => {
     const input: WormInput = { left: false, right: false, jump: false };
     for (let i = 0; i < 300; i++) updateWormPhysics(worm, terrain, input, 1 / 60);
     expect(worm.alive).toBe(false);
+  });
+});
+
+describe('applyDirectionalKnockback', () => {
+  it('sets horizontal velocity in the given direction, a vertical lift, and starts the knockback timer', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    worm.onGround = true;
+    applyDirectionalKnockback(worm, 1, 600, 200, 0.5);
+    expect(worm.vx).toBe(600);
+    expect(worm.vy).toBe(-200);
+    expect(worm.onGround).toBe(false);
+    expect(worm.knockbackTimer).toBe(0.5);
+  });
+
+  it('shoves in the negative direction when direction is -1', () => {
+    const worm = createWorm(0, 0, 'p1', 'A');
+    applyDirectionalKnockback(worm, -1, 600, 200, 0.5);
+    expect(worm.vx).toBe(-600);
+  });
+});
+
+describe('updateWormPhysics knockback', () => {
+  it('ignores input and skips the usual vx clamp/decay while knocked back', () => {
+    const terrain = flatTerrain(2000, 100, 90); // ground far below - worm stays airborne for the test window
+    const worm = createWorm(500, 10, 'p1', 'A');
+    applyDirectionalKnockback(worm, 1, 600, 0, 0.5);
+    const input: WormInput = { left: true, right: false, jump: false }; // tries to fight the shove
+    updateWormPhysics(worm, terrain, input, 1 / 60);
+    expect(worm.vx).toBeCloseTo(600, 0); // not decayed by the usual 0.8 factor, not overridden by held-left input
+  });
+
+  it('resumes normal control and clamping once the knockback timer expires', () => {
+    const terrain = flatTerrain(2000, 100, 90);
+    const worm = createWorm(500, 10, 'p1', 'A');
+    applyDirectionalKnockback(worm, 1, 600, 0, 0.05);
+    const input: WormInput = { left: false, right: false, jump: false };
+    updateWormPhysics(worm, terrain, input, 0.06); // outlasts the 0.05s knockback window
+    expect(worm.knockbackTimer).toBeNull();
+    expect(Math.abs(worm.vx)).toBeLessThanOrEqual(WORM_MOVE_SPEED);
   });
 });

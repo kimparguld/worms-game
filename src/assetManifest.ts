@@ -45,6 +45,7 @@ const WEAPON_PLACEHOLDER_COLORS: Record<string, number> = {
   homingMissile: 0xe91e63,
   clusterBomb: 0x8e44ad,
   clusterFragment: 0xb07cc6,
+  bat: 0x795548,
 };
 
 const WEAPON_HELD_ENTRIES: AssetManifestEntry[] = Object.entries(WEAPON_PLACEHOLDER_COLORS).map(([key, color]) => ({

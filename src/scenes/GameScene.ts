@@ -26,6 +26,7 @@ import {
   SHOTGUN_TRACER_DURATION,
   WORM_RENDER_SCALE,
 } from '../constants.js';
+import { WEAPONS } from '../weapons.js';
 import { soundSystem } from '../sound.js';
 import { aimWormAtPoint, isMobileDevice } from '../mobile.js';
 import type { Worm, MatchRuntime } from '../types.js';
@@ -648,7 +649,8 @@ export class GameScene extends Phaser.Scene {
     const activeWeaponKey = WEAPON_KEYS[sharedInput.selectedWeapon - 1] ?? 'bazooka';
     const weaponHasOwnAimIndicator =
       activeWeaponKey === 'bazooka' || activeWeaponKey === 'shotgun' || activeWeaponKey === 'homingMissile';
-    if (active.worm.alive && (this.rt.charging || !weaponHasOwnAimIndicator)) {
+    const isMeleeWeapon = WEAPONS[activeWeaponKey].melee;
+    if (!isMeleeWeapon && active.worm.alive && (this.rt.charging || !weaponHasOwnAimIndicator)) {
       const worm = active.worm;
       const fireAngle = worm.facing === 1 ? worm.aimAngle : Math.PI - worm.aimAngle;
       const innerRadius = 16;

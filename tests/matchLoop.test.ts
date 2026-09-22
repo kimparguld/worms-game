@@ -648,6 +648,52 @@ describe('stepMatch water', () => {
   });
 });
 
+describe('stepMatch baseball bat', () => {
+  it('damages and shoves the nearest worm ahead of the swinger', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const swinger = rt.teams[0].worms[0];
+    const target = rt.teams[1].worms[0];
+    swinger.facing = 1;
+    target.x = swinger.x + 30; // ahead, well within the bat's short range
+    const batIndex = WEAPON_KEYS.indexOf('bat') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: batIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(target.hp).toBe(STARTING_HP - WEAPONS.bat.maxDamage);
+    expect(target.vx).toBeGreaterThan(0); // shoved away from the swinger
+    expect(target.knockbackTimer).not.toBeNull();
+  });
+
+  it('ignores a worm standing behind the swinger', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const swinger = rt.teams[0].worms[0];
+    const target = rt.teams[1].worms[0];
+    swinger.facing = 1;
+    target.x = swinger.x - 30; // behind, not ahead
+    const batIndex = WEAPON_KEYS.indexOf('bat') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: batIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(target.hp).toBe(STARTING_HP);
+  });
+
+  it('ignores a worm beyond the bats short range', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const swinger = rt.teams[0].worms[0];
+    const target = rt.teams[1].worms[0];
+    swinger.facing = 1;
+    target.x = swinger.x + 500; // far beyond range
+    const batIndex = WEAPON_KEYS.indexOf('bat') + 1;
+    const input = makeInput({ firing: true, selectedWeapon: batIndex });
+
+    stepMatch(rt, input, 0.016);
+
+    expect(target.hp).toBe(STARTING_HP);
+  });
+});
+
 describe('WEAPON_KEYS', () => {
   it('lists all ten original weapons plus the three newest at the end', () => {
     expect(WEAPON_KEYS).toEqual([
