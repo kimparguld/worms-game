@@ -1,4 +1,5 @@
 import type { InputState } from './types.js';
+import { cycleWeapon } from './matchLoop.js';
 
 type Action =
   | 'left'
@@ -17,7 +18,9 @@ type Action =
   | 'weapon7'
   | 'weapon8'
   | 'weapon9'
-  | 'weapon10';
+  | 'weapon10'
+  | 'prevWeapon'
+  | 'nextWeapon';
 
 const KEY_MAP: Record<string, Action> = {
   ArrowLeft: 'left',
@@ -46,6 +49,8 @@ const KEY_MAP: Record<string, Action> = {
   '8': 'weapon8',
   '9': 'weapon9',
   '0': 'weapon10',
+  '[': 'prevWeapon',
+  ']': 'nextWeapon',
 };
 
 export function keyToAction(key: string): Action | null {
@@ -89,6 +94,8 @@ export function attachInputListeners(inputState: InputState, target: EventTarget
     else if (action === 'jump') inputState.jump = true;
     else if (action === 'fire') inputState.firing = true;
     else if (action === 'endTurn') inputState.endTurnRequested = true;
+    else if (action === 'prevWeapon') inputState.selectedWeapon = cycleWeapon(inputState.selectedWeapon, -1);
+    else if (action === 'nextWeapon') inputState.selectedWeapon = cycleWeapon(inputState.selectedWeapon, 1);
     else if (WEAPON_NUMBERS[action]) inputState.selectedWeapon = WEAPON_NUMBERS[action]!;
   });
 

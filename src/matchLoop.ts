@@ -44,6 +44,11 @@ export const WEAPON_KEYS: WeaponKey[] = [
   'clusterBomb',
   'bat',
 ];
+
+export function cycleWeapon(current: number, delta: number): number {
+  const max = WEAPON_KEYS.length;
+  return ((current - 1 + delta + max) % max) + 1;
+}
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
 const AIRSTRIKE_STRIKE_COUNT = 5;

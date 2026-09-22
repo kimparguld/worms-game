@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../matchLoop.js';
+import { createMatchRuntime, stepMatch, WEAPON_KEYS, cycleWeapon } from '../matchLoop.js';
 import { checkWinner, currentWorm } from '../game.js';
 import {
   updateHud,
@@ -457,8 +457,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private selectMobileWeapon(delta: number): void {
-    const maxWeapon = WEAPON_KEYS.length;
-    sharedInput.selectedWeapon = ((sharedInput.selectedWeapon - 1 + delta + maxWeapon) % maxWeapon) + 1;
+    sharedInput.selectedWeapon = cycleWeapon(sharedInput.selectedWeapon, delta);
     this.updateMobileWeaponLabel();
   }
 

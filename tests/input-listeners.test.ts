@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { createInputState, attachInputListeners } from '../src/input.js';
+import { WEAPON_KEYS } from '../src/matchLoop.js';
 
 describe('attachInputListeners', () => {
   it('sets and clears movement flags on keydown/keyup', () => {
@@ -40,5 +41,20 @@ describe('attachInputListeners', () => {
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' }));
     expect(state.selectedWeapon).toBe(10);
+  });
+
+  it('cycles the selected weapon forward and backward with the bracket keys, wrapping at the ends', () => {
+    const state = createInputState();
+    attachInputListeners(state, window);
+    expect(state.selectedWeapon).toBe(1);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '[' }));
+    expect(state.selectedWeapon).toBe(WEAPON_KEYS.length); // wraps backward from 1
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ']' }));
+    expect(state.selectedWeapon).toBe(1); // forward again, back to 1
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ']' }));
+    expect(state.selectedWeapon).toBe(2);
   });
 });

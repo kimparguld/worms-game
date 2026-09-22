@@ -29,6 +29,11 @@ describe('keyToAction', () => {
     expect(keyToAction('0')).toBe('weapon10');
   });
 
+  it('maps "[" and "]" to weapon-cycle actions', () => {
+    expect(keyToAction('[')).toBe('prevWeapon');
+    expect(keyToAction(']')).toBe('nextWeapon');
+  });
+
   it('returns null for unmapped keys', () => {
     expect(keyToAction('q')).toBeNull();
   });

@@ -11,6 +11,7 @@ const CONTROLS = [
   'Space (hold) - Charge and fire weapon',
   '1-9, 0 - Select weapon (Bazooka, Grenade, Shotgun, Ninja Rope, Dynamite,',
   'Sniper Rifle, Airstrike Rocket, Holy Hand Grenade, Mine, Drill)',
+  '[ / ] - Cycle to the 3 newest weapons (Homing Missile, Cluster Bomb, Bat)',
   'Backspace / Esc - End turn',
 ];
 

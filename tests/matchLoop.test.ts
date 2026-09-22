@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createMatchRuntime, stepMatch, WEAPON_KEYS } from '../src/matchLoop.js';
+import { createMatchRuntime, stepMatch, WEAPON_KEYS, cycleWeapon } from '../src/matchLoop.js';
 import { createTerrain } from '../src/terrain.js';
 import { createWorm, takeDamage } from '../src/worm.js';
 import { createMatch } from '../src/game.js';
@@ -1131,5 +1131,17 @@ describe('stepMatch falling gravestones', () => {
 
     expect(rt.gravestones[0].landed).toBe(true);
     expect(rt.gravestones[0].y - deathY).toBeLessThan(5);
+  });
+});
+
+describe('cycleWeapon', () => {
+  it('advances forward and wraps past the last weapon back to the first', () => {
+    expect(cycleWeapon(1, 1)).toBe(2);
+    expect(cycleWeapon(WEAPON_KEYS.length, 1)).toBe(1);
+  });
+
+  it('goes backward and wraps past the first weapon to the last', () => {
+    expect(cycleWeapon(2, -1)).toBe(1);
+    expect(cycleWeapon(1, -1)).toBe(WEAPON_KEYS.length);
   });
 });
