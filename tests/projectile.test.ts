@@ -152,3 +152,34 @@ describe('updateProjectile', () => {
     expect(Math.hypot(projectile.vx, projectile.vy)).toBeCloseTo(700, 0); // speed preserved (homingMissile has no gravity/wind)
   });
 });
+
+describe('updateProjectile cluster bomb', () => {
+  it('spawns 5 cluster fragments at the detonation point when a cluster bomb explodes', () => {
+    const terrain = flatTerrain(400, 400, 100);
+    const projectile = createProjectile('clusterBomb', 60, 50, Math.PI / 2, 1);
+    let result: ProjectileUpdateResult | undefined;
+    for (let i = 0; i < 200 && !(result && result.exploded); i++) {
+      result = updateProjectile(projectile, terrain, [], 0, 1 / 60);
+    }
+    expect(result!.exploded).toBe(true);
+    expect(result!.spawned).toHaveLength(5);
+    for (const fragment of result!.spawned!) {
+      expect(fragment.weaponKey).toBe('clusterFragment');
+      expect(fragment.alive).toBe(true);
+      expect(fragment.x).toBeCloseTo(projectile.x, 0);
+      expect(fragment.y).toBeCloseTo(projectile.y, 0);
+    }
+  });
+
+  it('does not spawn further fragments when a cluster fragment itself explodes', () => {
+    const terrain = flatTerrain(400, 400, 100);
+    const projectile = createProjectile('clusterFragment', 60, 99, 0, 0);
+    let result: ProjectileUpdateResult | undefined;
+    for (let i = 0; i < 400; i++) {
+      result = updateProjectile(projectile, terrain, [], 0, 1 / 60);
+      if (result.exploded) break;
+    }
+    expect(result!.exploded).toBe(true);
+    expect(result!.spawned).toEqual([]);
+  });
+});

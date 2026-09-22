@@ -994,6 +994,36 @@ describe('stepMatch homing missile', () => {
   });
 });
 
+describe('stepMatch cluster bomb', () => {
+  it('adds spawned fragments to rt.projectiles only after the tick the parent detonates on', () => {
+    const rt = makeRuntime(twoWormTeams());
+    const clusterIndex = WEAPON_KEYS.indexOf('clusterBomb') + 1;
+    const worm = rt.match.turnOrder[0].worm;
+    worm.aimAngle = 0; // level shot - gravity alone brings it down onto the flat ground just below
+    const input = makeInput({ firing: true, selectedWeapon: clusterIndex });
+
+    stepMatch(rt, input, 0.2); // charge
+    input.firing = false;
+    stepMatch(rt, input, 0.016); // release - fires, still airborne
+    expect(rt.projectiles.filter((p) => p.weaponKey === 'clusterBomb')).toHaveLength(1);
+    expect(rt.projectiles.filter((p) => p.weaponKey === 'clusterFragment')).toHaveLength(0);
+
+    let detonated = false;
+    for (let i = 0; i < 20 && !detonated; i++) {
+      stepMatch(rt, input, 1 / 60);
+      detonated = rt.projectiles.every((p) => p.weaponKey !== 'clusterBomb');
+    }
+
+    const fragments = rt.projectiles.filter((p) => p.weaponKey === 'clusterFragment');
+    expect(fragments).toHaveLength(5);
+    const yRightAfterSpawn = fragments[0].y;
+
+    stepMatch(rt, input, 1 / 60);
+    const sameFragment = rt.projectiles.find((p) => p === fragments[0])!;
+    expect(sameFragment.y).not.toBe(yRightAfterSpawn); // it has now moved - it wasn't ticked on its spawn frame, but is ticking normally since
+  });
+});
+
 describe('createMatchRuntime limited-weapon ammo', () => {
   it('seeds each team with independent starting ammo for airstrike and holy hand grenade', () => {
     const rt = createMatchRuntime(960, 540);

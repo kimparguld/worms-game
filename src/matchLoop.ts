@@ -23,7 +23,7 @@ import {
   GRAVITY,
   STARTING_HP,
 } from './constants.js';
-import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate, Explosion } from './types.js';
+import type { Worm, WormInput, Team, WeaponKey, InputState, MatchRuntime, Vector2, Crate, Explosion, Projectile } from './types.js';
 
 export const WEAPON_KEYS: WeaponKey[] = [
   'bazooka',
@@ -37,6 +37,7 @@ export const WEAPON_KEYS: WeaponKey[] = [
   'mine',
   'drill',
   'homingMissile',
+  'clusterBomb',
 ];
 // px above the actual terrain surface, so worms fall a small, consistent distance
 const SPAWN_SURFACE_BUFFER = 20;
@@ -413,6 +414,7 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
   }
 
   rt.projectiles = rt.projectiles.filter((p) => p.alive);
+  const spawnedThisTick: Projectile[] = [];
   for (const p of rt.projectiles) {
     const result = updateProjectile(p, rt.terrain, allWorms(rt), rt.match.wind, dt);
     if (result.exploded) {
@@ -422,8 +424,10 @@ export function stepMatch(rt: MatchRuntime, input: InputState, dt: number): void
         radius: WEAPONS[p.weaponKey].craterRadius,
         timer: EXPLOSION_EFFECT_DURATION,
       });
+      if (result.spawned) spawnedThisTick.push(...result.spawned);
     }
   }
+  rt.projectiles.push(...spawnedThisTick);
 
   if (rt.shotgunTracer) {
     rt.shotgunTracer.timer -= dt;

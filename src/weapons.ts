@@ -7,6 +7,7 @@ export const WEAPON_MATCH_LIMITS: Partial<Record<WeaponKey, number>> = {
   airstrikeRocket: 1,
   holyHandGrenade: 2,
   homingMissile: 2,
+  clusterBomb: 2,
 };
 
 export const WEAPONS: Record<WeaponKey, WeaponDef> = {

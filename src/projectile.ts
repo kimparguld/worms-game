@@ -149,8 +149,8 @@ export function updateProjectile(
 
   if (isFuseBased) {
     if (hitWorm) {
-      explode(projectile, terrain, worms, def);
-      return { exploded: true };
+      const spawned = explode(projectile, terrain, worms, def);
+      return { exploded: true, spawned };
     }
     if (hitTerrain) {
       projectile.x = collision.safeX;
@@ -167,20 +167,23 @@ export function updateProjectile(
       }
     }
     if (fuseExpired) {
-      explode(projectile, terrain, worms, def);
-      return { exploded: true };
+      const spawned = explode(projectile, terrain, worms, def);
+      return { exploded: true, spawned };
     }
     return { exploded: false };
   }
 
   if (hitTerrain || hitWorm) {
-    explode(projectile, terrain, worms, def);
-    return { exploded: true };
+    const spawned = explode(projectile, terrain, worms, def);
+    return { exploded: true, spawned };
   }
   return { exploded: false };
 }
 
-function explode(projectile: Projectile, terrain: Terrain, worms: Worm[], def: WeaponDef): void {
+const CLUSTER_FRAGMENT_MIN_SPEED = 150;
+const CLUSTER_FRAGMENT_MAX_SPEED = 350;
+
+function explode(projectile: Projectile, terrain: Terrain, worms: Worm[], def: WeaponDef): Projectile[] {
   projectile.alive = false;
   if (def.craterRadius > 0) {
     carveCircle(terrain, projectile.x, projectile.y, def.craterRadius);
@@ -194,4 +197,21 @@ function explode(projectile: Projectile, terrain: Terrain, worms: Worm[], def: W
       applyExplosionKnockback(worm, damage);
     }
   }
+  if (!def.clusterCount) return [];
+  const fragments: Projectile[] = [];
+  for (let i = 0; i < def.clusterCount; i++) {
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI; // upward-biased spread
+    const speed = CLUSTER_FRAGMENT_MIN_SPEED + Math.random() * (CLUSTER_FRAGMENT_MAX_SPEED - CLUSTER_FRAGMENT_MIN_SPEED);
+    fragments.push({
+      weaponKey: 'clusterFragment',
+      x: projectile.x,
+      y: projectile.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      fuseRemaining: WEAPONS.clusterFragment.fuseTime,
+      alive: true,
+      owner: projectile.owner,
+    });
+  }
+  return fragments;
 }
