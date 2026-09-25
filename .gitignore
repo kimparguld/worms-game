@@ -5,4 +5,5 @@ dist/
 .worktrees/
 .superpowers/
 __pycache__/
-**/.DS_Storedocs/superpowers/
+**/.DS_Store
+docs/superpowers/
